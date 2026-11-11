@@ -1,6 +1,7 @@
 import { content } from '../../content';
 import { openEquations, openSources } from '../../ui/drawer';
 import { fmtSig } from '../../ui/format';
+import { createMoreDetail } from '../../ui/controls';
 import { bigNumber, card, el } from '../../ui/readout';
 import { coalesce } from '../../ui/batch';
 import { requestRender, setActiveView, isMobile } from '../../engine/renderer';
@@ -42,20 +43,21 @@ export function createRadiatorTab(summary: (text: string) => void) {
   const tag = el('div', 'scale-tag', 'not to scale');
   const scene = createRadiatorScene(isMobile(), tag);
   const hud = el('div');
-  const key = card('Heat shed by the radiator (both faces)');
+  const key = card('Heat shed (both faces)');
+  key.element.classList.add('hero');
   const keyNum = bigNumber(key.body);
-  const keySub = el('div', 'sub');
   const compare = el('div', 'compare');
   const track = el('div', 'track');
   const dot = el('div', 'dot');
   const env = el('div', 'tick amber');
   const ideal = el('div', 'tick dim');
   const sentence = el('div', 'sub');
-  const warning = el('div', 'bad', 'This panel is absorbing more than it sheds.');
+  const warning = el('div', 'caption bad', 'Absorbing more than it sheds.');
   warning.hidden = true;
   compare.append(track, dot, env, ideal);
-  key.body.append(keyNum.el, keySub, compare, sentence, warning);
+  key.body.append(keyNum.el, compare, sentence, warning);
 
+  const breakdown = el('div');
   const faces = el('div', 'faces');
   const faceA = faceCard('A');
   const faceB = faceCard('B');
@@ -63,7 +65,8 @@ export function createRadiatorTab(summary: (text: string) => void) {
   const legend = createHeatLegend();
   const spectrum = createSpectrumCard();
   const foot = el('div', 'faint');
-  hud.append(key.element, legend, faces, spectrum.element, foot);
+  const more = createMoreDetail('radiator', [legend, breakdown, spectrum.element, foot]);
+  hud.append(key.element, faces, more);
 
   const panel = createRadiatorPanel({
     state,
@@ -135,7 +138,6 @@ export function createRadiatorTab(summary: (text: string) => void) {
     const total = result.total_net;
     keyNum.set(`${fmtSig(total)} W/m²`);
     keyNum.el.classList.toggle('bad', total < 0);
-    keySub.textContent = `${fmtSig(total / 1000)} kW/m² · heat shed per square meter`;
     const scaleMax = Math.max(result.ideal, 1200, Math.max(total, 0));
     const at = (v: number) => `${Math.min(100, Math.max(0, (v / scaleMax) * 100))}%`;
     dot.style.left = at(total);
@@ -143,7 +145,9 @@ export function createRadiatorTab(summary: (text: string) => void) {
     ideal.style.left = at(result.ideal);
     const pct = Math.round((100 * total) / content.backOfEnvelopeWm2);
     const pct2 = Math.round((100 * total) / result.ideal);
-    sentence.innerHTML = `<strong>${pct}%</strong> of the back-of-envelope estimate · <strong>${pct2}%</strong> of the 3 K-sky ideal`;
+    sentence.textContent = `${pct}% of the estimate`;
+    sentence.className = 'caption';
+    void pct2;
     warning.hidden = total >= 0;
     paintFaceCard(faceA, 'A', result.A);
     paintFaceCard(faceB, 'B', result.B);
@@ -170,7 +174,7 @@ export function createRadiatorTab(summary: (text: string) => void) {
     ];
     const sum = parts.reduce((a, p) => a + p.v, 0) || 1;
     face.stack.replaceChildren();
-    face.legend.replaceChildren();
+    face.legend.replaceChildren(el('div', 'field-label', `Face ${which}`));
     for (const part of parts) {
       const seg = el('i');
       seg.style.width = `${(part.v / sum) * 100}%`;
@@ -186,13 +190,13 @@ export function createRadiatorTab(summary: (text: string) => void) {
     const canvas = document.createElement('canvas');
     canvas.style.width = '100%';
     const title = el('div', 'field-label', `Face ${which}`);
-    const sees = el('div', 'faint', 'Sees an effective temperature of');
     const temp = el('div', 'num-lg');
-    const celsius = el('div', 'faint');
+    const celsius = el('div', 'caption');
     const stack = el('div', 'stack');
     const legendRow = el('div');
-    const shed = el('div', 'sub');
-    root.append(title, canvas, sees, temp, celsius, stack, legendRow, shed);
+    const shed = el('div', 'caption');
+    root.append(title, canvas, temp, celsius, stack, shed);
+    breakdown.append(legendRow);
     root.addEventListener('click', () => {
       state.face = which;
       recompute();
@@ -229,12 +233,14 @@ export function createRadiatorTab(summary: (text: string) => void) {
     controls: panel.element,
     tag,
     show() {
+      document.getElementById('stage')?.append(tag);
       scene.rebind();
       const view = scene.view();
       setActiveView(view);
       wrapped();
     },
     hide() {
+      tag.remove();
       scene.detach();
     },
     reset() {

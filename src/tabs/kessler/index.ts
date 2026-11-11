@@ -5,6 +5,7 @@ import { bigNumber, card, el } from '../../ui/readout';
 import {
   createButtonRow,
   createCollapsible,
+  createMoreDetail,
   createRangeSlider,
   createSegmented,
   createSlider,
@@ -97,8 +98,8 @@ export function createKesslerTab(summary: (text: string) => void) {
   const scene = createKesslerScene(tip);
   const hud = el('div', 'grid-2');
 
-  const banner = el('div', 'banner span-2');
-  const bannerTitle = el('div', 'num-lg');
+  const banner = el('div', 'banner span-2 hero');
+  const bannerTitle = el('div', 'num-xl');
   const bannerSub = el('div', 'sub');
   const bannerWarn = el('div', 'bad');
   bannerWarn.hidden = true;
@@ -108,6 +109,7 @@ export function createKesslerTab(summary: (text: string) => void) {
   const satsNum = bigNumber(satsCard.body);
   const satsSub = el('div', 'sub');
   const filing = el('div', 'faint');
+  satsNum.el.classList.replace('num-xl', 'num-lg');
   satsCard.body.append(satsNum.el, satsSub, filing);
 
   const camCard = card('Collision-avoidance maneuvers per month');
@@ -118,16 +120,19 @@ export function createKesslerTab(summary: (text: string) => void) {
   const meterFill = el('div', 'meter-fill');
   meter.append(meterFill);
   const meterNote = el('div', 'faint');
+  camNum.el.classList.replace('num-xl', 'num-lg');
   camCard.body.append(camNum.el, camSub, camDay, meter, meterNote);
 
   const hitsCard = card('Undodgeable hits from untracked debris');
   const hitsNum = bigNumber(hitsCard.body);
   const hitsSub = el('div', 'sub');
+  hitsNum.el.classList.replace('num-xl', 'num-lg');
   hitsCard.body.append(hitsNum.el, hitsSub);
 
   const deadCard = card('Dead satellites');
   const deadNum = bigNumber(deadCard.body);
   const deadSub = el('div', 'sub');
+  deadNum.el.classList.replace('num-xl', 'num-lg');
   deadCard.body.append(deadNum.el, deadSub);
 
   const fragCard = card('New debris per year');
@@ -145,29 +150,19 @@ export function createKesslerTab(summary: (text: string) => void) {
   const moneyBody = el('div');
   money.body.append(moneyBody, el('div', 'faint', 'Bigger satellites: fewer maneuvers, but each loss costs more.'));
   const dots = el('div', 'faint span-2');
-  hud.append(
-    banner,
-    satsCard.element,
-    camCard.element,
-    hitsCard.element,
-    deadCard.element,
-    fragCard.element,
-    gaugeCard.element,
-    latency,
-    money.element,
-    r0Legend(),
-    dots,
-  );
+  const more = createMoreDetail('kessler', [fragCard.element, gaugeCard.element, latency, money.element, r0Legend(), dots]);
+  hud.append(banner, satsCard.element, camCard.element, hitsCard.element, deadCard.element, more);
 
-  const pause = el('button', 'btn hud-corner', 'Pause motion');
-  pause.type = 'button';
-  pause.addEventListener('click', () => {
-    state.paused = !state.paused;
-    pause.textContent = state.paused ? 'Play motion' : 'Pause motion';
-    pause.setAttribute('aria-pressed', String(state.paused));
-    scene.setPaused(state.paused);
+  const pause = createToggle({
+    id: 'k-pause',
+    label: 'Pause motion',
+    value: reducedMotion(),
+    onChange: (on) => {
+      state.paused = on;
+      scene.setPaused(on);
+    },
   });
-  if (reducedMotion()) pause.disabled = true;
+  pause.element.classList.add('hud-corner');
 
   const badge = el('div', 'badge', 'Reference fleet: Starlink today');
   badge.hidden = true;
@@ -384,28 +379,29 @@ export function createKesslerTab(summary: (text: string) => void) {
 
   const controls = el('div');
   controls.append(
+    el('h2', 'section-title', 'Scenarios'),
+    createButtonRow(
+      [
+        { label: 'SpaceX as filed', onClick: () => applyScenario('filed') },
+        { label: 'Best case for SpaceX', onClick: () => applyScenario('best') },
+        { label: 'Starlink today', onClick: () => applyScenario('starlink') },
+      ],
+      'scenarios',
+    ),
     el('h2', 'section-title', 'How much compute?'),
-    el('div', 'sub', 'SpaceX/Musk targets range from 100 GW/yr to 1 TW/yr'),
     rate.element,
     life.element,
     nSlider.element,
     eachLine,
     resetSat,
     badge,
-    el('h2', 'section-title', 'Where?'),
     preset.element,
     band.element,
-    el('h2', 'section-title', 'How good is collision avoidance?'),
+    el('h2', 'section-title', 'Avoidance'),
     dodge.element,
     disp.element,
-    createCollapsible('Advanced', [vuln.element, frag.element, coord.element, years.element, usdW.element, usdKg.element]),
     debrisToggle.element,
-    el('h2', 'section-title', 'Scenarios'),
-    createButtonRow([
-      { label: 'SpaceX as filed', onClick: () => applyScenario('filed') },
-      { label: 'Best case for SpaceX', onClick: () => applyScenario('best') },
-      { label: 'Starlink today (reference)', onClick: () => applyScenario('starlink') },
-    ]),
+    createCollapsible('Advanced', [vuln.element, frag.element, coord.element, years.element, usdW.element, usdKg.element]),
     el('div', 'footer-row', ''),
   );
   const footer = controls.querySelector('.footer-row') as HTMLElement;
@@ -449,7 +445,7 @@ export function createKesslerTab(summary: (text: string) => void) {
     band.setValue(state.band, true);
     debrisToggle.setValue(state.debris, true);
     syncN(true);
-    pause.textContent = state.paused ? 'Play motion' : 'Pause motion';
+    pause.setValue(state.paused, true);
     scene.setPaused(state.paused);
     scene.setDebris(state.debris);
   }
@@ -588,7 +584,7 @@ export function createKesslerTab(summary: (text: string) => void) {
   return {
     hud,
     controls,
-    corner: pause,
+    corner: pause.element,
     show() {
       scene.rebind();
       setActiveView(scene.view());

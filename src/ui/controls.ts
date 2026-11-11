@@ -104,13 +104,15 @@ export function createSlider(opts: {
   };
   const paintMarks = () => {
     markRow.replaceChildren();
-    for (const mark of marks) {
-      if (mark.value < min || mark.value > max) continue;
-      const node = el('div', 'mark', mark.label);
-      node.style.left = `${toT(mark.value) * 100}%`;
-      markRow.append(node);
+    const tick = marks.find((mark) => mark.label === '' && mark.value >= min && mark.value <= max);
+    if (!tick) {
+      markRow.hidden = true;
+      return;
     }
-    markRow.hidden = marks.length === 0;
+    const node = el('div', 'mark-tick');
+    node.style.left = `${toT(tick.value) * 100}%`;
+    markRow.append(node);
+    markRow.hidden = false;
   };
   paint();
   paintMarks();
@@ -271,6 +273,25 @@ export function createSegmented<T extends string>(opts: {
     row.append(button);
     return { opt, button };
   });
+  const fit = () => {
+    row.style.gridTemplateColumns = `repeat(${buttons.length}, minmax(0, 1fr))`;
+    for (const item of buttons) {
+      item.button.style.whiteSpace = 'nowrap';
+      item.button.style.overflow = 'hidden';
+      item.button.style.textOverflow = 'ellipsis';
+    }
+    const overflows = buttons.some((item) => item.button.scrollWidth > item.button.clientWidth + 1);
+    if (!overflows) return;
+    row.style.gridTemplateColumns = 'repeat(2, minmax(0, 1fr))';
+    for (const item of buttons) {
+      item.button.style.whiteSpace = 'normal';
+      item.button.style.overflow = 'visible';
+      item.button.style.textOverflow = 'clip';
+    }
+  };
+  const observer = new ResizeObserver(fit);
+  observer.observe(row);
+  requestAnimationFrame(fit);
   const paint = () => {
     for (const item of buttons) item.button.setAttribute('aria-pressed', String(item.opt.value === value));
   };
@@ -296,10 +317,18 @@ export function createToggle(opts: {
   onChange: (v: boolean) => void;
 }): { element: HTMLElement; setValue: (v: boolean, silent?: boolean) => void } {
   let value = opts.value;
-  const button = el('button', 'toggle', opts.label);
+  const button = el('button', 'switch');
   button.id = opts.id;
   button.type = 'button';
-  const paint = () => button.setAttribute('aria-pressed', String(value));
+  button.setAttribute('role', 'switch');
+  const label = el('span', 'switch-label', opts.label);
+  const track = el('span', 'switch-ui');
+  track.append(el('span', 'switch-thumb'));
+  button.append(label, track);
+  const paint = () => {
+    button.setAttribute('aria-checked', String(value));
+    button.classList.toggle('on', value);
+  };
   paint();
   button.addEventListener('click', () => {
     value = !value;
@@ -346,15 +375,44 @@ export function createSelect<T extends string>(opts: {
 
 export function createButtonRow(
   buttons: { label: string; onClick: () => void; variant?: string }[],
+  layout: 'stack' | 'chips' | 'scenarios' = 'stack',
 ): HTMLElement {
-  const row = el('div', 'btn-row');
+  const row = el('div', layout === 'stack' ? 'btn-row' : 'chip-grid');
   for (const spec of buttons) {
     const button = el('button', spec.variant === 'accent' ? 'btn accent' : 'btn', spec.label);
     button.type = 'button';
+    if (layout === 'scenarios') button.dataset.scenario = spec.label;
     button.addEventListener('click', spec.onClick);
     row.append(button);
   }
   return row;
+}
+
+export function createMoreDetail(id: string, children: HTMLElement[]): HTMLElement {
+  const key = `more-detail:${id}`;
+  let open = false;
+  try {
+    open = sessionStorage.getItem(key) === '1';
+  } catch {
+    open = false;
+  }
+  const wrap = el('div', 'collapsible more span-2');
+  const button = el('button', '', open ? 'More detail ▾' : 'More detail ▸');
+  button.type = 'button';
+  const body = el('div');
+  body.hidden = !open;
+  body.append(...children);
+  button.addEventListener('click', () => {
+    body.hidden = !body.hidden;
+    button.textContent = body.hidden ? 'More detail ▸' : 'More detail ▾';
+    try {
+      sessionStorage.setItem(key, body.hidden ? '0' : '1');
+    } catch {
+      /* private mode */
+    }
+  });
+  wrap.append(button, body);
+  return wrap;
 }
 
 export function createCollapsible(title: string, children: HTMLElement[], open = false): HTMLElement {

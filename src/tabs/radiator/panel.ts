@@ -1,5 +1,4 @@
 import { COATINGS, type CoatingId } from '../../physics/radiator';
-import { content } from '../../content';
 import { createButtonRow, createSelect, createSlider, createToggle, type SliderHandle } from '../../ui/controls';
 import { fmtTemp } from '../../ui/format';
 import { el } from '../../ui/readout';
@@ -125,20 +124,22 @@ export function createRadiatorPanel(opts: {
   point.append(
     tilt.element,
     heading.element,
-    createButtonRow([
-      { label: 'A → straight up', onClick: () => opts.onOrient('up') },
-      { label: 'A → Earth', onClick: () => opts.onOrient('earth') },
-      { label: 'A → Sun', onClick: () => opts.onOrient('sun') },
-      { label: 'Edge-on to Sun & Earth', onClick: () => opts.onOrient('edge') },
-    ]),
+    createButtonRow(
+      [
+        { label: 'A → straight up', onClick: () => opts.onOrient('up') },
+        { label: 'A → Earth', onClick: () => opts.onOrient('earth') },
+        { label: 'A → Sun', onClick: () => opts.onOrient('sun') },
+        { label: 'Edge-on to Sun & Earth', onClick: () => opts.onOrient('edge') },
+      ],
+      'chips',
+    ),
   );
 
   const rad = el('div', 'section');
   rad.append(el('div', 'section-title', 'Radiator'));
   temp = createSlider({
     id: 'temp',
-    label: 'Radiator temperature',
-    sublabel: 'Shown with the Celsius equivalent',
+    label: 'Temperature',
     min: 250,
     max: 400,
     step: 1,
@@ -185,14 +186,16 @@ export function createRadiatorPanel(opts: {
   const scenarios = el('div', 'section');
   scenarios.append(el('div', 'section-title', 'Scenarios'));
   scenarios.append(
-    createButtonRow([
-      { label: 'Best case: dawn/dusk orbit, edge-on', onClick: () => opts.onScenario('best') },
-      { label: 'Face A to deep space (night side)', onClick: () => opts.onScenario('night') },
-      { label: 'Face A to deep space (day/night line)', onClick: () => opts.onScenario('term') },
-      { label: 'Flat, at noon (worst)', onClick: () => opts.onScenario('noon') },
-      { label: 'Higher orbit: 2000 km, edge-on', onClick: () => opts.onScenario('high') },
-      { label: 'Focus panel', onClick: opts.onFocus, variant: 'accent' },
-    ]),
+    createButtonRow(
+      [
+        { label: 'Best case (edge-on)', onClick: () => opts.onScenario('best') },
+        { label: 'Face A to space (night)', onClick: () => opts.onScenario('night') },
+        { label: 'Face A to space (day/night)', onClick: () => opts.onScenario('term') },
+        { label: 'Flat at noon', onClick: () => opts.onScenario('noon') },
+        { label: '2000 km edge-on', onClick: () => opts.onScenario('high') },
+      ],
+      'scenarios',
+    ),
   );
 
   const footer = el('div', 'footer-row');
@@ -205,10 +208,13 @@ export function createRadiatorPanel(opts: {
   const reset = el('button', 'btn', 'Reset view');
   reset.type = 'button';
   reset.addEventListener('click', opts.onReset);
-  footer.append(sources, eqs, reset);
+  const focus = el('button', 'btn', 'Focus panel');
+  focus.type = 'button';
+  focus.addEventListener('click', opts.onFocus);
+  footer.append(sources, eqs, focus, reset);
 
   const element = el('div');
-  element.append(where, point, rad, scenarios, footer, el('div', 'faint', content.tabs.radiator.label));
+  element.append(scenarios, where, point, rad, footer);
 
   return {
     element,

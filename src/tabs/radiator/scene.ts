@@ -24,7 +24,7 @@ import type { FaceFlux, RadiatorResult } from '../../physics/radiator';
 import type { Vec3 } from '../../physics/vec';
 import { createEarth } from '../../engine/earth';
 import { createHeatMaterial, setHeat, type HeatMaterial } from '../../engine/heatMaterial';
-import { createControls, makeCamera, reducedMotion, requestRender, type TabView } from '../../engine/renderer';
+import { clearUserOrbit, createControls, makeCamera, reducedMotion, requestRender, type TabView } from '../../engine/renderer';
 import { createStarfield, createSunSprite } from '../../engine/starfield';
 
 const T_COLD = 150;
@@ -162,17 +162,20 @@ export function createRadiatorScene(mobile: boolean, tag: HTMLElement) {
       },
       resetView() {
         focus = null;
+        clearUserOrbit(controls);
         camera.position.copy(homePos);
         controls.target.copy(homeTarget);
         controls.update();
         requestRender();
       },
+      onResize() {
+        focus = null;
+        camera.position.copy(homePos);
+        controls.target.copy(homeTarget);
+        controls.update();
+      },
       syncDom() {
-        const w = canvas().parentElement?.clientWidth ?? 1;
-        const h = canvas().parentElement?.clientHeight ?? 1;
         projected.copy(panel.position).project(camera);
-        tag.style.left = `${(projected.x * 0.5 + 0.5) * w}px`;
-        tag.style.top = `${(-projected.y * 0.5 + 0.5) * h + 18}px`;
         tag.hidden = projected.z > 1;
       },
     };

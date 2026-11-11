@@ -8,8 +8,13 @@ export interface TabView {
   update: (dt: number) => boolean;
   resetView: () => void;
   onQualityDrop?: (level: number) => void;
+  onResize?: () => void;
   syncDom?: () => void;
 }
+
+const userMoved = new WeakMap<OrbitControls, boolean>();
+let sizedW = 0;
+let sizedH = 0;
 
 let renderer: WebGLRenderer | null = null;
 let host: HTMLElement | null = null;
@@ -59,6 +64,14 @@ function applySize(): void {
   renderer.setSize(w, h, false);
   active.camera.aspect = w / h;
   active.camera.updateProjectionMatrix();
+  const changed = w !== sizedW || h !== sizedH;
+  sizedW = w;
+  sizedH = h;
+  if (changed && !userMoved.get(active.controls)) active.onResize?.();
+}
+
+export function clearUserOrbit(controls: OrbitControls): void {
+  userMoved.set(controls, false);
 }
 
 function dropQuality(): void {
@@ -175,7 +188,11 @@ export function createControls(
   controls.minDistance = limits?.min ?? 1.3;
   controls.maxDistance = limits?.max ?? 12;
   controls.enablePan = true;
-  controls.addEventListener('start', requestRender);
+  userMoved.set(controls, false);
+  controls.addEventListener('start', () => {
+    userMoved.set(controls, true);
+    requestRender();
+  });
   controls.addEventListener('change', requestRender);
   return controls;
 }

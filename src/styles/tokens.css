@@ -1,7 +1,7 @@
 :root {
   --bg: #05070c;
   --bg-grad: radial-gradient(1200px 800px at 70% -10%, #0d1a2b 0%, #05070c 60%);
-  --panel: rgba(10, 16, 26, 0.72);
+  --panel: #0a0f18;
   --panel-border: rgba(120, 180, 255, 0.14);
   --line: rgba(120, 180, 255, 0.22);
   --text: #e6edf5;

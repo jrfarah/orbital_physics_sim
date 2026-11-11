@@ -6,33 +6,36 @@ body {
   background-image: var(--bg-grad);
   color: var(--text);
   font-family: var(--font-body);
-  font-size: 14px;
+  font-size: 13px;
   line-height: 1.4;
   overscroll-behavior: none;
 }
 button, input, select { font: inherit; color: inherit; }
 button { cursor: pointer; }
 h1, h2, h3, p { margin: 0; }
-#app { min-height: 100dvh; }
+html, body, #app { height: 100%; }
+#app { display: flex; flex-direction: column; overflow: hidden; min-height: 0; }
 #topbar {
   height: var(--top);
+  flex: none;
   display: grid;
-  grid-template-columns: 1fr auto 1fr;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
   padding: 0 12px 0 max(12px, env(safe-area-inset-left));
   padding-right: max(12px, env(safe-area-inset-right));
   border-bottom: 1px solid var(--panel-border);
-  background: rgba(5, 7, 12, 0.88);
-  position: sticky;
-  top: 0;
+  background: #0a0f18;
   z-index: 20;
 }
 #site-title {
-  font-family: var(--font-head);
+  font-family: var(--font-body);
   font-weight: 600;
-  font-size: 15px;
+  font-size: 13px;
   letter-spacing: 0.01em;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
 }
 #tabbar {
   display: flex;
@@ -45,9 +48,9 @@ h1, h2, h3, p { margin: 0; }
   overflow-x: auto;
 }
 .tab {
-  font-family: var(--font-head);
-  font-weight: 500;
-  font-size: 14px;
+  font-family: var(--font-body);
+  font-weight: 600;
+  font-size: 13px;
   background: transparent;
   border: 0;
   color: var(--text-dim);
@@ -82,43 +85,50 @@ h1, h2, h3, p { margin: 0; }
   place-items: center;
 }
 #copy-link:hover { color: var(--accent); border-color: var(--accent); }
-#stage { position: relative; height: calc(100dvh - var(--top)); }
+#shell {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 360px minmax(0, 1fr) 340px;
+  grid-template-areas: "readouts stage controls";
+}
+#hud {
+  grid-area: readouts;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  background: #0a0f18;
+  border-right: 1px solid var(--panel-border);
+  padding: 16px;
+}
+#hud > * { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+#hud > .grid-2 { display: grid; grid-template-columns: 1fr 1fr; align-content: start; }
+#stage {
+  grid-area: stage;
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: #05070c;
+}
 #canvas-host { position: absolute; inset: 0; }
 #canvas-host canvas { width: 100%; height: 100%; display: block; touch-action: none; }
-#hud {
-  position: absolute;
-  z-index: 2;
-  left: 14px;
-  top: 14px;
-  width: min(380px, calc(100vw - var(--panel-w) - 48px));
-  max-height: calc(100% - 110px);
-  overflow: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  pointer-events: none;
-  padding-bottom: 8px;
-}
-#hud > * { pointer-events: auto; }
 #panel {
-  position: absolute;
-  z-index: 3;
-  top: 0;
-  right: 0;
-  width: var(--panel-w);
-  height: 100%;
+  grid-area: controls;
+  min-width: 0;
+  min-height: 0;
   overflow: auto;
-  padding: 14px 14px calc(14px + env(safe-area-inset-bottom));
+  padding: 16px 16px calc(16px + env(safe-area-inset-bottom));
   border-left: 1px solid var(--panel-border);
-  background: rgba(5, 7, 12, 0.55);
+  background: #0a0f18;
 }
 #takeaway {
   position: absolute;
   z-index: 4;
-  left: calc(50% - var(--panel-w) / 2);
-  bottom: 16px;
-  transform: translateX(-50%);
-  width: min(720px, calc(100% - var(--panel-w) - 420px));
+  left: 12px;
+  bottom: 12px;
+  max-width: min(560px, calc(100% - 24px));
+  pointer-events: auto;
 }
 #toast {
   position: fixed;
@@ -149,14 +159,19 @@ h1, h2, h3, p { margin: 0; }
 .scale-tag, .disc-tag {
   position: absolute;
   z-index: 2;
+  top: 12px;
+  left: 12px;
   pointer-events: none;
-  font-family: var(--font-mono);
+  font-family: var(--font-body);
   font-size: 11px;
   color: var(--text-dim);
-  background: rgba(5, 7, 12, 0.55);
+  background: rgba(10, 15, 24, 0.88);
   border: 1px solid var(--panel-border);
   border-radius: 999px;
-  padding: 2px 8px;
+  padding: 4px 8px;
+  max-width: calc(100% - 24px);
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 .shell-tip {
@@ -166,35 +181,57 @@ h1, h2, h3, p { margin: 0; }
   min-width: 180px;
   max-width: 240px;
 }
+@media (max-width: 1279px) and (min-width: 900px) {
+  html, body, #app { height: auto; min-height: 100%; overflow: visible; }
+  #shell {
+    grid-template-columns: minmax(0, 1fr) 320px;
+    grid-template-rows: 62vh auto;
+    grid-template-areas:
+      "stage controls"
+      "readouts controls";
+    height: auto;
+  }
+  #stage { height: 62vh; }
+  #hud {
+    overflow: visible;
+    border-right: 0;
+    border-top: 1px solid var(--panel-border);
+  }
+  #hud > *:not(.grid-2) {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    align-content: start;
+  }
+  #hud > *:not(.grid-2) > :first-child,
+  #hud > *:not(.grid-2) > .span-2,
+  #hud > *:not(.grid-2) > .faces,
+  #hud > *:not(.grid-2) > .chart-host,
+  #hud > *:not(.grid-2) > .collapsible,
+  #hud > *:not(.grid-2) > .legend-row { grid-column: 1 / -1; }
+  #panel {
+    position: sticky;
+    top: 0;
+    align-self: start;
+    height: 100dvh;
+    max-height: 100dvh;
+  }
+}
 @media (max-width: 899px) {
-  #site-title { font-size: 12px; }
-  #topbar { grid-template-columns: auto 1fr auto; gap: 8px; }
-  #tabbar { justify-self: center; }
-  #stage {
+  #topbar { grid-template-columns: minmax(0, auto) minmax(0, 1fr) auto; gap: 8px; }
+  #tabbar { justify-self: center; min-width: 0; }
+  #shell {
     display: flex;
     flex-direction: column;
-    height: calc(100dvh - var(--top));
+    height: auto;
+    margin-bottom: calc(64px + env(safe-area-inset-bottom));
     overflow: hidden;
   }
-  #canvas-host { position: relative; height: 52dvh; flex: none; }
-  #takeaway {
-    position: relative;
-    left: auto;
-    bottom: auto;
-    transform: none;
-    width: auto;
-    margin: 8px 10px 0;
-  }
+  #stage { order: -1; height: 52dvh; flex: none; }
   #hud {
-    position: relative;
-    left: auto;
-    top: auto;
-    width: auto;
-    max-height: none;
-    overflow: visible;
     flex: 1;
-    padding: 8px 10px calc(88px + env(safe-area-inset-bottom));
-    pointer-events: auto;
+    overflow: auto;
+    border: 0;
+    padding: 12px;
   }
   #panel { display: none; }
 }

@@ -3,7 +3,7 @@ import { thermalBudget, type ThermalInput } from '../../physics/thermal';
 import { openEquations, openSources } from '../../ui/drawer';
 import { fmtArea, fmtAreaSub, fmtSig, fmtTemp } from '../../ui/format';
 import { card, el } from '../../ui/readout';
-import { createButtonRow, createSegmented, createSlider, createToggle } from '../../ui/controls';
+import { createButtonRow, createMoreDetail, createSegmented, createSlider, createToggle } from '../../ui/controls';
 import { setActiveView } from '../../engine/renderer';
 import { createThermalCharts } from './charts';
 import { createScalePanel } from './scalePanel';
@@ -86,7 +86,8 @@ export function createThermalTab(summary: (text: string) => void) {
   const scaleWrap = el('div');
   scaleWrap.append(el('h2', 'section-title', 'How big is this?'), scaleSwitch.element, scalePanel.element);
 
-  hud.append(power.element, legend, charts.element, scaleWrap);
+  const more = createMoreDetail('thermal', [legend, charts.detail, scaleWrap]);
+  hud.append(power.element, charts.element, more);
 
   const gpu = createSlider({
     id: 'th-gpu',
@@ -375,11 +376,13 @@ export function createThermalTab(summary: (text: string) => void) {
     hud,
     controls,
     show() {
+      document.getElementById('stage')?.append(disc);
       scene.rebind();
       setActiveView(scene.view());
       wrapped();
     },
     hide() {
+      disc.remove();
       scene.detach();
     },
     reset() {

@@ -16,7 +16,7 @@ import {
 } from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { createHeatMaterial, setHeat } from '../../engine/heatMaterial';
-import { createControls, makeCamera, reducedMotion, requestRender, type TabView } from '../../engine/renderer';
+import { clearUserOrbit, createControls, makeCamera, reducedMotion, requestRender, type TabView } from '../../engine/renderer';
 import { createStarfield } from '../../engine/starfield';
 
 const MAX = 4000;
@@ -144,10 +144,16 @@ export function createThermalScene(label: HTMLElement) {
         return live;
       },
       resetView() {
+        clearUserOrbit(controls);
         placeCamera(camera);
         controls.target.set(0, 0, 0);
         controls.update();
         requestRender();
+      },
+      onResize() {
+        placeCamera(camera);
+        controls.target.set(0, 0, 0);
+        controls.update();
       },
       syncDom() {
         const host = controls.domElement?.parentElement ?? null;

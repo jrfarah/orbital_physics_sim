@@ -77,15 +77,15 @@ for (const name of ['radiator', 'thermal', 'kessler'] as const) {
   buttons.set(name, button);
 }
 
-const takeText = el('p');
-const hideTake = el('button', '', 'Hide');
-hideTake.type = 'button';
-hideTake.addEventListener('click', () => {
-  sessionStorage.setItem('takeaway-hidden', '1');
-  takeawayEl.hidden = true;
+const takeChip = el('button', 'takeaway-chip', 'Takeaway ▸');
+takeChip.type = 'button';
+const takeText = el('p', 'takeaway-body');
+takeText.hidden = true;
+takeChip.addEventListener('click', () => {
+  takeText.hidden = !takeText.hidden;
+  takeChip.textContent = takeText.hidden ? 'Takeaway ▸' : 'Takeaway ▾';
 });
-takeawayEl.className = 'takeaway';
-takeawayEl.append(takeText, hideTake);
+takeawayEl.append(takeChip, takeText);
 
 const debug = el('div', 'heat-debug');
 debug.hidden = true;
@@ -109,7 +109,9 @@ function placeControls(tab: Tab): void {
 
 function showTakeaway(name: TabName): void {
   takeText.textContent = takeaways[name];
-  takeawayEl.hidden = sessionStorage.getItem('takeaway-hidden') === '1';
+  takeText.hidden = true;
+  takeChip.textContent = 'Takeaway ▸';
+  takeawayEl.hidden = false;
 }
 
 function parseHash(): { name: string; params: URLSearchParams } {

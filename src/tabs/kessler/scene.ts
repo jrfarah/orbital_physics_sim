@@ -16,7 +16,7 @@ import { Scene } from 'three';
 import { R_E } from '../../physics/constants';
 import { H_C, SHAPE, V_SH, type ShellRow } from '../../physics/kessler';
 import { createEarth } from '../../engine/earth';
-import { createControls, isMobile, makeCamera, reducedMotion, requestRender, type TabView } from '../../engine/renderer';
+import { clearUserOrbit, createControls, isMobile, makeCamera, reducedMotion, requestRender, type TabView } from '../../engine/renderer';
 import { createStarfield, createSunSprite } from '../../engine/starfield';
 import { r0Style } from './gauges';
 
@@ -415,7 +415,7 @@ export function createKesslerScene(tip: HTMLElement) {
       camera,
       controls,
       update(dt) {
-        const play = !paused && !reducedMotion();
+        const play = !paused;
         if (!play) return false;
         time += dt;
         satMat.uniforms.uTime.value = time;
@@ -425,10 +425,16 @@ export function createKesslerScene(tip: HTMLElement) {
         return true;
       },
       resetView() {
+        clearUserOrbit(controls);
         camera.position.set(3.4, 1.8, 3.6);
         controls.target.set(0, 0, 0);
         controls.update();
         requestRender();
+      },
+      onResize() {
+        camera.position.set(3.4, 1.8, 3.6);
+        controls.target.set(0, 0, 0);
+        controls.update();
       },
       onQualityDrop(level) {
         quality = level;
@@ -443,7 +449,7 @@ export function createKesslerScene(tip: HTMLElement) {
     apply,
     instanceCount: () => instances,
     setPaused(on: boolean) {
-      paused = on || reducedMotion();
+      paused = on;
       if (!paused) requestRender();
     },
     setDebris(on: boolean) {

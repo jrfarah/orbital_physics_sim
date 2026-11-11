@@ -30,9 +30,32 @@ export function token(name: string): string {
 
 export function createChart(host: HTMLElement, aspect = 1.7): { draw: (spec: ChartSpec) => void; destroy: () => void } {
   const canvas = document.createElement('canvas');
+  const labels = document.createElement('div');
+  labels.className = 'chart-labels';
   host.classList.add('chart-wrap');
-  host.append(canvas);
+  host.append(canvas, labels);
   let spec: ChartSpec | null = null;
+  const placed: { x: number; y: number; w: number; h: number }[] = [];
+  const place = (text: string, x: number, y: number, color: string) => {
+    const node = document.createElement('span');
+    node.className = 'chart-label';
+    node.textContent = text;
+    node.style.color = color;
+    labels.append(node);
+    const w = node.offsetWidth;
+    const h = node.offsetHeight || 12;
+    const left = Math.max(0, Math.min(x, host.clientWidth - w));
+    const top = Math.max(0, Math.min(y, host.clientHeight - h));
+    const box = { x: left, y: top, w, h };
+    const hit = placed.some((prev) => box.x < prev.x + prev.w && box.x + box.w > prev.x && box.y < prev.y + prev.h && box.y + box.h > prev.y);
+    if (hit) {
+      node.remove();
+      return;
+    }
+    node.style.left = `${left}px`;
+    node.style.top = `${top}px`;
+    placed.push(box);
+  };
   const drawNow = () => {
     if (!spec) return;
     const width = Math.max(10, host.clientWidth);
@@ -46,10 +69,12 @@ export function createChart(host: HTMLElement, aspect = 1.7): { draw: (spec: Cha
     if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, width, height);
+    labels.replaceChildren();
+    placed.length = 0;
     const left = 54;
-    const right = 10;
-    const top = 12;
-    const bottom = spec.bandLabels ? 46 : 32;
+    const right = 12;
+    const top = spec.yLabel ? 22 : 8;
+    const bottom = spec.bandLabels ? 46 : 28;
     const plotW = width - left - right;
     const plotH = height - top - bottom;
     const [x0, x1] = spec.xDomain;
@@ -75,7 +100,7 @@ export function createChart(host: HTMLElement, aspect = 1.7): { draw: (spec: Cha
       ctx.lineTo(left + plotW, y);
       ctx.stroke();
       const value = spec.yLog ? y0 * (y1 / y0) ** (1 - i / 4) : y1 - ((y1 - y0) * i) / 4;
-      ctx.fillText(formatTick(value), 2, y + 3);
+      place(formatTick(value), 2, y - 6, token('--text-dim'));
     }
     if (spec.shade) {
       for (const shade of spec.shade) {
@@ -122,10 +147,7 @@ export function createChart(host: HTMLElement, aspect = 1.7): { draw: (spec: Cha
         ctx.moveTo(x, top);
         ctx.lineTo(x, top + plotH);
         ctx.stroke();
-        if (line.label) {
-          ctx.fillStyle = line.color;
-          ctx.fillText(line.label, x + 4, top + 12);
-        }
+        if (line.label) place(line.label, x + 4, top + 2, line.color);
       }
     }
     if (spec.hLines) {
@@ -138,10 +160,7 @@ export function createChart(host: HTMLElement, aspect = 1.7): { draw: (spec: Cha
         ctx.lineTo(left + plotW, y);
         ctx.stroke();
         ctx.setLineDash([]);
-        if (line.label) {
-          ctx.fillStyle = line.color;
-          ctx.fillText(line.label, left + 4, y - 4);
-        }
+        if (line.label) place(line.label, left + 4, y - 14, line.color);
       }
     }
     if (spec.points) {
@@ -150,26 +169,16 @@ export function createChart(host: HTMLElement, aspect = 1.7): { draw: (spec: Cha
         ctx.beginPath();
         ctx.arc(xOf(point.x), yOf(point.y), 4, 0, Math.PI * 2);
         ctx.fill();
-        if (point.label) ctx.fillText(point.label, xOf(point.x) + 6, yOf(point.y) - 6);
+        if (point.label) place(point.label, xOf(point.x) + 6, yOf(point.y) - 14, point.color);
       }
     }
-    ctx.fillStyle = token('--text-dim');
     const ticks = spec.xTicks ?? [];
-    for (const tick of ticks) {
-      const x = xOf(tick.value);
-      ctx.fillText(tick.label, x - 16, top + plotH + 14);
-    }
+    for (const tick of ticks) place(tick.label, xOf(tick.value) - 16, top + plotH + 6, token('--text-dim'));
     if (spec.bandLabels) {
-      for (const band of spec.bandLabels) ctx.fillText(band.label, xOf(band.x) - 18, top + plotH + 30);
+      for (const band of spec.bandLabels) place(band.label, xOf(band.x) - 18, top + plotH + 20, token('--text-faint'));
     }
-    if (spec.xLabel) ctx.fillText(spec.xLabel, left, height - 2);
-    if (spec.yLabel) {
-      ctx.save();
-      ctx.translate(12, top + plotH / 2);
-      ctx.rotate(-Math.PI / 2);
-      ctx.fillText(spec.yLabel, 0, 0);
-      ctx.restore();
-    }
+    if (spec.xLabel) place(spec.xLabel, left, height - 14, token('--text-dim'));
+    if (spec.yLabel) place(spec.yLabel, left, 2, token('--text-dim'));
   };
   const observer = new ResizeObserver(() => drawNow());
   observer.observe(host);

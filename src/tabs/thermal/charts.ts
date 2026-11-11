@@ -3,19 +3,25 @@ import { createChart } from '../../ui/charts';
 import { fmtSig } from '../../ui/format';
 import { el } from '../../ui/readout';
 
-export function createThermalCharts(): { element: HTMLElement; update: (input: ThermalInput, tHot: number) => void } {
-  const element = el('div');
+export function createThermalCharts(): {
+  element: HTMLElement;
+  detail: HTMLElement;
+  update: (input: ThermalInput, tHot: number) => void;
+} {
+  const element = el('div', 'chart-host');
+  const detail = el('div', 'chart-host');
   const aHost = el('div');
   const bHost = el('div');
-  const aNote = el('div', 'sub');
-  const bNote = el('div', 'sub');
-  element.append(el('h2', 'section-title', 'Heat shed per m² vs radiator temperature'), aHost, aNote);
-  element.append(el('h2', 'section-title', 'Total area vs radiator temperature'), bHost, bNote);
+  const aNote = el('div', 'caption');
+  const bNote = el('div', 'caption');
+  detail.append(el('h2', 'section-title', 'Heat shed per m² vs radiator temperature'), aHost, aNote);
+  element.append(el('h2', 'section-title', 'Does a heat pump help?'), bHost, bNote);
   const chartA = createChart(aHost, 1.7);
   const chartB = createChart(bHost, 1.7);
 
   return {
     element,
+    detail,
     update(input, tHot) {
       const base = thermalBudget({ ...input, pump: false, T_hot: null });
       const cold = base.T_cold;
