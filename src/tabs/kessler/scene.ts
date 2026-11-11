@@ -2,10 +2,10 @@ import {
   BufferAttribute,
   BufferGeometry,
   Color,
-  InstancedBufferAttribute,
-  InstancedMesh,
+  CustomBlending,
   Mesh,
-  PlaneGeometry,
+  OneFactor,
+  OneMinusSrcColorFactor,
   Points,
   ShaderMaterial,
   SphereGeometry,
@@ -25,7 +25,7 @@ const R500 = R_E + 500;
 const OMEGA_500 = Math.sqrt(MU / R500 ** 3);
 const TIME_SCALE = (Math.PI * 2) / (24 * OMEGA_500);
 const MAX_SATS = 8192;
-const MAX_DEBRIS = 3000;
+const MAX_DEBRIS = 1500;
 
 const ORBIT = /* glsl */ `
 vec3 orbitPos(float radius, float incl, float raan, float phase0, float omega, float time) {
@@ -70,19 +70,20 @@ export function createKesslerScene(tip: HTMLElement) {
   const shellGeo = new SphereGeometry(1, mobile ? 32 : 48, mobile ? 24 : 32);
   const shells: ShellVis[] = [];
 
-  const satGeo = new PlaneGeometry(0.008, 0.008);
+  const satGeo = new BufferGeometry();
   const satRadius = new Float32Array(MAX_SATS);
   const satIncl = new Float32Array(MAX_SATS);
   const satRaan = new Float32Array(MAX_SATS);
   const satPhase = new Float32Array(MAX_SATS);
   const satOmega = new Float32Array(MAX_SATS);
   const satColor = new Float32Array(MAX_SATS * 3);
-  satGeo.setAttribute('aRadius', new InstancedBufferAttribute(satRadius, 1));
-  satGeo.setAttribute('aIncl', new InstancedBufferAttribute(satIncl, 1));
-  satGeo.setAttribute('aRaan', new InstancedBufferAttribute(satRaan, 1));
-  satGeo.setAttribute('aPhase0', new InstancedBufferAttribute(satPhase, 1));
-  satGeo.setAttribute('aOmega', new InstancedBufferAttribute(satOmega, 1));
-  satGeo.setAttribute('aColor', new InstancedBufferAttribute(satColor, 3));
+  satGeo.setAttribute('position', new BufferAttribute(new Float32Array(MAX_SATS * 3), 3));
+  satGeo.setAttribute('aRadius', new BufferAttribute(satRadius, 1));
+  satGeo.setAttribute('aIncl', new BufferAttribute(satIncl, 1));
+  satGeo.setAttribute('aRaan', new BufferAttribute(satRaan, 1));
+  satGeo.setAttribute('aPhase0', new BufferAttribute(satPhase, 1));
+  satGeo.setAttribute('aOmega', new BufferAttribute(satOmega, 1));
+  satGeo.setAttribute('aColor', new BufferAttribute(satColor, 3));
   const satMat = new ShaderMaterial({
     uniforms: { uTime: { value: 0 } },
     vertexShader: /* glsl */ `
@@ -94,30 +95,24 @@ export function createKesslerScene(tip: HTMLElement) {
       attribute vec3 aColor;
       uniform float uTime;
       varying vec3 vColor;
-      varying vec2 vUv;
       ${ORBIT}
       void main() {
         vColor = aColor;
-        vUv = uv;
         vec3 world = orbitPos(aRadius, aIncl, aRaan, aPhase0, aOmega, uTime);
-        vec4 mv = modelViewMatrix * vec4(world, 1.0);
-        mv.xy += position.xy;
-        gl_Position = projectionMatrix * mv;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(world, 1.0);
+        gl_PointSize = 2.0;
       }
     `,
     fragmentShader: /* glsl */ `
       varying vec3 vColor;
-      varying vec2 vUv;
       void main() {
-        vec2 d = vUv - 0.5;
-        if (dot(d, d) > 0.22) discard;
         gl_FragColor = vec4(vColor, 1.0);
       }
     `,
   });
-  const sats = new InstancedMesh(satGeo, satMat, MAX_SATS);
-  sats.count = 0;
+  const sats = new Points(satGeo, satMat);
   sats.frustumCulled = false;
+  sats.renderOrder = 3;
   scene.add(sats);
 
   const debrisGeo = new BufferGeometry();
@@ -154,12 +149,13 @@ export function createKesslerScene(tip: HTMLElement) {
       void main() {
         vec2 d = gl_PointCoord - 0.5;
         if (dot(d, d) > 0.25) discard;
-        gl_FragColor = vec4(0.545, 0.584, 0.639, 0.5);
+        gl_FragColor = vec4(0.545, 0.584, 0.639, 0.3);
       }
     `,
   });
   const debris = new Points(debrisGeo, debrisMat);
   debris.frustumCulled = false;
+  debris.renderOrder = 1;
   scene.add(debris);
 
   const camera = makeCamera();
@@ -182,7 +178,7 @@ export function createKesslerScene(tip: HTMLElement) {
     return Math.max(200, Math.floor((mobile ? 2500 : 6000) / 2 ** quality));
   }
   function debrisBudget(): number {
-    return Math.max(200, Math.floor((mobile ? 1200 : 3000) / 2 ** quality));
+    return Math.max(80, Math.floor((mobile ? 600 : 1500) / 2 ** quality));
   }
 
   function clearShells(): void {
@@ -196,21 +192,20 @@ export function createKesslerScene(tip: HTMLElement) {
   function buildShells(rows: ShellRow[]): void {
     clearShells();
     if (rows.length === 0) {
-      sats.count = 0;
+      satGeo.setDrawRange(0, 0);
       instances = 0;
       return;
     }
-    const logs = rows.map((row) => Math.log10(Math.max(row.N, 1)));
-    const lo = Math.min(...logs);
-    const hi = Math.max(...logs);
     for (const row of rows) {
       const style = r0Style(row.R0);
       const mat = new ShaderMaterial({
         transparent: true,
         depthWrite: false,
+        blending: CustomBlending,
+        blendSrc: OneFactor,
+        blendDst: OneMinusSrcColorFactor,
         uniforms: {
           uColor: { value: new Color().setRGB(style.rgb[0], style.rgb[1], style.rgb[2]) },
-          uOpacity: { value: 0.05 + 0.13 * (hi === lo ? 1 : (Math.log10(Math.max(row.N, 1)) - lo) / (hi - lo)) },
           uPulse: { value: 1 },
         },
         vertexShader: /* glsl */ `
@@ -227,15 +222,16 @@ export function createKesslerScene(tip: HTMLElement) {
           varying vec3 vN;
           varying vec3 vV;
           uniform vec3 uColor;
-          uniform float uOpacity;
           uniform float uPulse;
           void main() {
-            float fres = pow(1.0 - abs(dot(normalize(vN), normalize(vV))), 1.5);
-            gl_FragColor = vec4(uColor, uOpacity * mix(0.2, 1.0, fres) * uPulse);
+            float fres = pow(1.0 - abs(dot(normalize(vN), normalize(vV))), 5.0);
+            float alpha = min(0.35, fres * uPulse);
+            gl_FragColor = vec4(uColor * alpha, alpha);
           }
         `,
       });
       const mesh = new Mesh(shellGeo, mat);
+      mesh.renderOrder = 2;
       const radius = 1 + row.h / R_E;
       mesh.scale.setScalar(radius);
       scene.add(mesh);
@@ -259,21 +255,25 @@ export function createKesslerScene(tip: HTMLElement) {
       }
       sat += count;
     }
-    (satGeo.getAttribute('aColor') as InstancedBufferAttribute).needsUpdate = true;
+    (satGeo.getAttribute('aColor') as BufferAttribute).needsUpdate = true;
   }
 
   function buildSats(rows: ShellRow[]): void {
-    const cap = budget();
-    const weights = rows.map((row) => row.N);
-    const sum = weights.reduce((a, b) => a + b, 0) || 1;
-    const base = 30;
-    const extra = Math.max(0, cap - base * rows.length);
+    const totalN = rows.reduce((sum, row) => sum + Math.max(0, row.N), 0);
+    const cap = Math.min(MAX_SATS, budget(), Math.round(totalN));
+    const raw = rows.map((row) => (totalN > 0 ? (cap * row.N) / totalN : 0));
+    const counts = raw.map((value) => Math.floor(value));
+    let leftover = cap - counts.reduce((sum, value) => sum + value, 0);
+    const order = raw
+      .map((value, index) => ({ index, frac: value - Math.floor(value) }))
+      .sort((a, b) => b.frac - a.frac);
+    for (let i = 0; i < leftover; i++) counts[order[i % order.length]!.index] += 1;
     const rng = mulberry32(0x6e55);
     const incs = [53, 70, 97.6, 30].map((d) => (d * Math.PI) / 180);
     const weightsInc = [0.35, 0.15, 0.35, 0.15];
     let cursor = 0;
     rows.forEach((row, index) => {
-      const count = Math.min(MAX_SATS - cursor, base + Math.floor((extra * weights[index]) / sum));
+      const count = Math.min(MAX_SATS - cursor, counts[index] ?? 0);
       shells[index].mesh.userData.count = count;
       const style = r0Style(row.R0);
       for (let i = 0; i < count; i++) {
@@ -302,7 +302,7 @@ export function createKesslerScene(tip: HTMLElement) {
       cursor += count;
     });
     instances = cursor;
-    sats.count = cursor;
+    satGeo.setDrawRange(0, cursor);
     for (const name of ['aRadius', 'aIncl', 'aRaan', 'aPhase0', 'aOmega', 'aColor']) {
       satGeo.getAttribute(name).needsUpdate = true;
     }
@@ -421,7 +421,9 @@ export function createKesslerScene(tip: HTMLElement) {
         satMat.uniforms.uTime.value = time;
         debrisMat.uniforms.uTime.value = time;
         const pulse = 1 + 0.15 * Math.sin(Math.PI * time);
-        for (const shell of shells) shell.mat.uniforms.uPulse.value = r0Style(shell.row.R0).pulse ? pulse : 1;
+        let worst: (typeof shells)[number] | null = null;
+        for (const shell of shells) if (!worst || shell.row.R0 > worst.row.R0) worst = shell;
+        for (const shell of shells) shell.mat.uniforms.uPulse.value = shell === worst ? pulse : 1;
         return true;
       },
       resetView() {

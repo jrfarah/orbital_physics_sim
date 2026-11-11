@@ -98,42 +98,53 @@ export function createKesslerTab(summary: (text: string) => void) {
   const scene = createKesslerScene(tip);
   const hud = el('div', 'grid-2');
 
-  const banner = el('div', 'banner span-2 hero');
+  const banner = el('div', 'card hero span-2');
+  const titleRow = el('div', 'field-label', 'Debris cascade');
+  const info = el('button', 'info', 'ⓘ');
+  info.type = 'button';
+  info.setAttribute('aria-label', 'What tipping point means');
+  titleRow.append(info);
   const bannerTitle = el('div', 'num-xl');
-  const bannerSub = el('div', 'sub');
-  const bannerWarn = el('div', 'bad');
+  const bannerSub = el('div');
+  const bannerWarn = el('div', 'caption bad');
   bannerWarn.hidden = true;
-  banner.append(bannerTitle, bannerSub, bannerWarn);
+  const pop = el('div', 'popover');
+  pop.hidden = true;
+  const term = el('b', '', 'Tipping point');
+  pop.append(
+    term,
+    document.createTextNode(
+      ' (R₀ = 1): each collision makes enough debris to cause one more collision before atmospheric drag clears it. Above 1, collisions breed collisions. "33,300× past" means that altitude holds 33,300 times more effective targets than it can sustain.',
+    ),
+  );
+  info.addEventListener('click', () => {
+    pop.hidden = !pop.hidden;
+  });
+  banner.append(titleRow, bannerTitle, bannerSub, bannerWarn, pop);
 
   const satsCard = card('Satellites in orbit');
   const satsNum = bigNumber(satsCard.body);
-  const satsSub = el('div', 'sub');
-  const filing = el('div', 'faint');
+  const satsSub = el('div', 'caption');
   satsNum.el.classList.replace('num-xl', 'num-lg');
-  satsCard.body.append(satsNum.el, satsSub, filing);
+  satsCard.body.append(satsSub);
 
-  const camCard = card('Collision-avoidance maneuvers per month');
+  const camCard = card('Dodges per month');
   const camNum = bigNumber(camCard.body);
-  const camSub = el('div', 'sub');
-  const camDay = el('div', 'faint');
-  const meter = el('div', 'meter');
-  const meterFill = el('div', 'meter-fill');
-  meter.append(meterFill);
-  const meterNote = el('div', 'faint');
+  const camSub = el('div', 'caption');
   camNum.el.classList.replace('num-xl', 'num-lg');
-  camCard.body.append(camNum.el, camSub, camDay, meter, meterNote);
+  camCard.body.append(camSub);
 
-  const hitsCard = card('Undodgeable hits from untracked debris');
+  const hitsCard = card('Killed by untracked debris');
   const hitsNum = bigNumber(hitsCard.body);
-  const hitsSub = el('div', 'sub');
+  const hitsSub = el('div', 'caption');
   hitsNum.el.classList.replace('num-xl', 'num-lg');
-  hitsCard.body.append(hitsNum.el, hitsSub);
+  hitsCard.body.append(hitsSub);
 
-  const deadCard = card('Dead satellites');
+  const deadCard = card('Dead satellites stranded');
   const deadNum = bigNumber(deadCard.body);
-  const deadSub = el('div', 'sub');
+  const deadSub = el('div', 'caption');
   deadNum.el.classList.replace('num-xl', 'num-lg');
-  deadCard.body.append(deadNum.el, deadSub);
+  deadCard.body.append(deadSub);
 
   const fragCard = card('New debris per year');
   const fragBody = el('div', 'sub');
@@ -166,15 +177,15 @@ export function createKesslerTab(summary: (text: string) => void) {
 
   const badge = el('div', 'badge', 'Reference fleet: Starlink today');
   badge.hidden = true;
-  const eachLine = el('div', 'sub');
+  const eachLine = el('div', 'caption');
 
   const rate = createSegmented<RateId>({
     id: 'k-rate',
-    label: 'Deployment rate',
+    label: 'Rate',
     options: [
-      { value: 'gw', label: '1 GW per year' },
-      { value: 'mid', label: '500 GW per year' },
-      { value: 'tw', label: '1 TW per year' },
+      { value: 'gw', label: '1 GW/yr' },
+      { value: 'mid', label: '500 GW/yr' },
+      { value: 'tw', label: '1 TW/yr' },
     ],
     value: 'gw',
     onChange: (id) => {
@@ -186,8 +197,7 @@ export function createKesslerTab(summary: (text: string) => void) {
   });
   const life = createSlider({
     id: 'k-life',
-    label: 'Satellite lifetime',
-    sublabel: 'SpaceX filing: ~5 years',
+    label: 'Lifetime',
     min: 3,
     max: 15,
     step: 1,
@@ -215,7 +225,7 @@ export function createKesslerTab(summary: (text: string) => void) {
       wrapped();
     },
   });
-  const resetSat = el('button', 'btn', 'Reset to SpaceX satellite (120 kW, ~800 m², ~70 m)');
+  const resetSat = el('button', 'text-link', 'reset to SpaceX satellite');
   resetSat.type = 'button';
   resetSat.addEventListener('click', () => {
     state.starlink = false;
@@ -257,8 +267,7 @@ export function createKesslerTab(summary: (text: string) => void) {
 
   const dodge = createSlider({
     id: 'k-dodge',
-    label: 'Dodge success for tracked objects',
-    sublabel: 'Applies only to objects big enough to track (≥10 cm). Untracked debris can\'t be dodged.',
+    label: 'Dodge success',
     min: 0,
     max: 100,
     step: 1,
@@ -388,7 +397,6 @@ export function createKesslerTab(summary: (text: string) => void) {
       ],
       'scenarios',
     ),
-    el('h2', 'section-title', 'How much compute?'),
     rate.element,
     life.element,
     nSlider.element,
@@ -400,8 +408,7 @@ export function createKesslerTab(summary: (text: string) => void) {
     el('h2', 'section-title', 'Avoidance'),
     dodge.element,
     disp.element,
-    debrisToggle.element,
-    createCollapsible('Advanced', [vuln.element, frag.element, coord.element, years.element, usdW.element, usdKg.element]),
+    createCollapsible('Advanced', [debrisToggle.element, vuln.element, frag.element, coord.element, years.element, usdW.element, usdKg.element]),
     el('div', 'footer-row', ''),
   );
   const footer = controls.querySelector('.footer-row') as HTMLElement;
@@ -492,38 +499,34 @@ export function createKesslerTab(summary: (text: string) => void) {
     const result = resultOf();
     const count = scene.apply(result.shells);
     const style = r0Style(result.R0_max);
-    banner.className = `banner span-2 ${result.R0_max < 1 ? 'stable' : result.R0_max <= 10 ? 'super' : result.R0_max <= 1000 ? 'run' : 'crit'}`;
-    bannerTitle.textContent =
-      result.R0_max < 1
-        ? 'STABLE: drag clears debris faster than collisions make it'
-        : result.R0_max <= 10
-          ? 'SUPERCRITICAL: collisions breed collisions'
-          : result.R0_max <= 1000
-            ? 'RUNAWAY CASCADE'
-            : `RUNAWAY CASCADE ×${fmtBig(result.R0_max)}`;
+    const status = result.R0_max < 1 ? 'Stable' : result.R0_max < 10 ? 'Past tipping point' : 'Runaway';
+    bannerTitle.textContent = status;
+    bannerTitle.className = status === 'Past tipping point' ? 'num-lg' : 'num-xl';
     bannerTitle.style.color = style.css;
     const worst = result.shells.find((row) => row.h === result.worst_h) ?? result.shells[0];
-    bannerSub.textContent = worst
-      ? `Worst shell: ${worst.hLo}-${worst.hHi} km, R₀ = ${fmtSig(result.R0_max)}`
-      : '';
+    bannerSub.replaceChildren();
+    if (worst) {
+      const where = `Worst altitude: ${worst.hLo.toLocaleString('en-US')}–${worst.hHi.toLocaleString('en-US')} km is `;
+      bannerSub.append(document.createTextNode(where));
+      if (result.R0_max < 1) {
+        bannerSub.append(document.createTextNode(`at ~${Math.round(result.R0_max * 100)}% of the tipping point`));
+      } else {
+        const times = result.R0_max >= 1000 ? fmtBig(result.R0_max) : String(Math.round(result.R0_max));
+        const strong = el('b', '', `${times}× past the tipping point`);
+        bannerSub.append(strong);
+      }
+    }
     bannerWarn.hidden = result.linear_regime_ok;
-    bannerWarn.textContent = "Beyond this model's range: satellites here would be destroyed faster than they are replaced.";
+    bannerWarn.textContent = "Off the model's scale: satellites are destroyed faster than replaced.";
     satsNum.set(fmtBig(result.N));
-    satsSub.textContent = `Launches needed per year: ${fmtBig(result.launches_per_yr)}`;
-    const fits = result.N <= 1_000_000;
-    filing.textContent = `${fits ? '✓' : '✗'} SpaceX's filing asks for 1,000,000`;
+    satsSub.textContent = `${fmtBig(result.launches_per_yr)}/yr to replace`;
     camNum.set(fmtBig(result.cam_per_month));
-    camSub.textContent = `${fmtSig(result.cam_ratio_vs_starlink, 2)}× Starlink today (34,500/month)`;
-    const perDay = result.N > 0 ? result.cam_per_month / result.N / 30 : 0;
-    camDay.textContent = `${fmtSig(perDay)} per satellite per day`;
-    const capped = Math.min(100, result.cam_ratio_vs_starlink);
-    meterFill.style.width = `${capped}%`;
-    meterNote.textContent = result.cam_ratio_vs_starlink > 100 ? `→ ×${fmtSig(result.cam_ratio_vs_starlink)}` : '';
-    hitsNum.set(`${fmtBig(result.kills_per_yr)} / year`);
+    camSub.textContent = `${fmtSig(result.cam_ratio_vs_starlink, 2)}× Starlink today`;
+    hitsNum.set(fmtBig(result.kills_per_yr));
     const pct = result.N > 0 ? (100 * result.kills_per_yr) / result.N : 0;
-    hitsSub.textContent = `${fmtSig(pct)}% of the fleet per year. ~1.2 million untracked 1-10 cm objects already in orbit (ESA). Dodge success: 0%.`;
+    hitsSub.textContent = `${fmtSig(pct)}% of fleet per year`;
     deadNum.set(fmtBig(result.derelicts));
-    deadSub.textContent = `Stranded after ${Math.round(state.tYr)} years`;
+    deadSub.textContent = `after ${Math.round(state.tYr)} years`;
     fragBody.textContent = `${fmtBig(result.fragments_per_yr)} trackable fragments (≥10 cm) and ${fmtBig(result.small_fragments_per_yr)} untracked fragments (1-10 cm). Today's entire untracked population: ~1.2 million.`;
     fragWarn.hidden = result.small_fragments_per_yr <= 1.2e6;
     const top = result.shells.reduce((a, b) => (a.h > b.h ? a : b), result.shells[0]);
@@ -534,11 +537,12 @@ export function createKesslerTab(summary: (text: string) => void) {
       line('Planned replacement per year', fmtUSD(result.planned_replacement_usd_per_yr)),
       line('Unplanned losses per year', fmtUSD(result.unplanned_loss_usd_per_yr)),
     );
-    const perDot = count > 0 ? result.N / count : 0;
-    dots.textContent = `Each dot ≈ ${fmtBig(perDot)} satellites. Gray points illustrate tracked debris already in orbit; they are not a count.`;
+    const perDot = count > 0 ? result.N / count : 1;
+    dots.textContent = perDot < 1.05 ? 'each dot = 1 satellite' : `each dot = ${fmtBig(Math.max(1, perDot))} satellites`;
+    const across = Math.round(result.span_m).toLocaleString('en-US');
     eachLine.textContent = state.starlink
-      ? `Reference fleet: ${fmtBig(STARLINK_N)} satellites · ${fmtArea(STARLINK_A)} · 800 kg`
-      : `Each satellite: ${fmtPower(state.pSat)} of compute · ${fmtArea(result.A_sat)} · ${fmtSig(result.span_m)} m across · ${fmtSig(result.m_sat)} kg`;
+      ? `${fmtArea(STARLINK_A)} · ${across} m across each`
+      : `${fmtPower(state.pSat)} · ${fmtArea(result.A_sat)} · ${across} m across each`;
     summary(`${fmtBig(result.N)} sats · R₀ ${fmtSig(result.R0_max)}`);
     rate.setDisabled(state.starlink);
     nSlider.setDisabled(state.starlink);

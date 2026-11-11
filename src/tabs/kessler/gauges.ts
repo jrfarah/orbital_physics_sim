@@ -45,54 +45,60 @@ export function r0Legend(): HTMLElement {
 
 const NS = 'http://www.w3.org/2000/svg';
 
+/** Degrees, 180 at 1 year (left) and 0 at 10,000 years (right). */
+export function lifetimeAngle(tauYears: number): number {
+  const t = Math.min(1, Math.max(0, Math.log10(Math.max(tauYears, 1e-9)) / 4));
+  return 180 - 180 * t;
+}
+
 export function createLifetimeGauge(): { element: HTMLElement; set: (tau: number, hKm: number) => void } {
   const element = el('div');
   element.append(el('div', 'field-label', 'Debris lifetime'));
   const svg = document.createElementNS(NS, 'svg');
-  svg.setAttribute('viewBox', '0 0 240 148');
+  svg.setAttribute('viewBox', '0 0 320 168');
   svg.setAttribute('width', '100%');
+  const cx = 160;
+  const cy = 132;
+  const radius = 86;
   const arc = document.createElementNS(NS, 'path');
-  arc.setAttribute('d', 'M 24 118 A 96 96 0 0 1 216 118');
+  arc.setAttribute('d', `M ${cx - radius} ${cy} A ${radius} ${radius} 0 0 0 ${cx + radius} ${cy}`);
   arc.setAttribute('fill', 'none');
   arc.setAttribute('stroke', '#5ce1ff');
   arc.setAttribute('stroke-width', '5');
+  arc.setAttribute('stroke-linecap', 'round');
   svg.append(arc);
-  const labels: [number, string][] = [
-    [0, '1 year'],
-    [1, 'a decade'],
-    [2, 'a century'],
-    [3, 'a millennium'],
-    [4, 'longer than recorded history'],
-  ];
-  for (const [log, name] of labels) {
-    const ang = Math.PI * (1 - log / 4);
-    const x = 120 + Math.cos(ang) * 108;
-    const y = 118 - Math.sin(ang) * 108;
+  const labels = ['1 yr', '10 yr', '100 yr', '1,000 yr', '10,000+ yr'];
+  labels.forEach((name, index) => {
+    const ang = ((180 - index * 45) * Math.PI) / 180;
+    const x = cx + Math.cos(ang) * (radius + 18);
+    const y = cy - Math.sin(ang) * (radius + 18);
     const node = document.createElementNS(NS, 'text');
     node.setAttribute('x', String(x));
     node.setAttribute('y', String(y));
     node.setAttribute('fill', '#9aa9bb');
-    node.setAttribute('font-size', '8');
-    node.setAttribute('text-anchor', log === 0 ? 'end' : log === 4 ? 'start' : 'middle');
+    node.setAttribute('font-size', '11');
+    node.setAttribute('text-anchor', index === 0 ? 'end' : index === 4 ? 'start' : 'middle');
+    node.setAttribute('dominant-baseline', 'middle');
     node.textContent = name;
     svg.append(node);
-  }
+  });
   const needle = document.createElementNS(NS, 'line');
-  needle.setAttribute('x1', '120');
-  needle.setAttribute('y1', '118');
+  needle.setAttribute('x1', String(cx));
+  needle.setAttribute('y1', String(cy));
   needle.setAttribute('stroke', '#e6edf5');
-  needle.setAttribute('stroke-width', '2');
+  needle.setAttribute('stroke-width', '3');
+  needle.setAttribute('stroke-linecap', 'round');
   svg.append(needle);
-  const readout = el('div', 'sub');
+  const readout = el('div', 'caption');
   element.append(svg, readout);
   return {
     element,
     set(tau, hKm) {
-      const t = Math.min(1, Math.max(0, Math.log10(Math.max(tau, 1)) / 4));
-      const ang = Math.PI * (1 - t);
-      needle.setAttribute('x2', String(120 + Math.cos(ang) * 84));
-      needle.setAttribute('y2', String(118 - Math.sin(ang) * 84));
-      readout.textContent = `Debris at ${Math.round(hKm)} km stays up ~${fmtDuration(tau)}`;
+      const ang = (lifetimeAngle(tau) * Math.PI) / 180;
+      const reach = radius * 0.85;
+      needle.setAttribute('x2', String(cx + Math.cos(ang) * reach));
+      needle.setAttribute('y2', String(cy - Math.sin(ang) * reach));
+      readout.textContent = `Debris at ${Math.round(hKm)} km lasts ~${fmtDuration(tau)}`;
     },
   };
 }

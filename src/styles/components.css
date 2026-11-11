@@ -255,6 +255,9 @@
 .delta.bad { color: var(--bad); background: rgba(255, 77, 77, 0.14); }
 .delta.good { color: var(--good); background: rgba(61, 220, 151, 0.14); }
 .area-leaders line { stroke: rgba(197, 204, 214, 0.85); }
+.info { margin-left: 4px; padding: 0; border: 0; background: none; color: var(--accent); font-size: 13px; }
+.popover { margin-top: 8px; padding: 8px; border: 1px solid var(--panel-border); border-radius: 8px; font-size: 13px; }
+.text-link { margin: 4px 0 8px; padding: 0; border: 0; background: none; color: var(--accent); font-size: 13px; text-align: left; }
 .reticle { position: absolute; }
 .reticle i { position: absolute; width: 8px; height: 8px; border: 0 solid #5ce1ff; }
 .reticle i:nth-child(1) { left: 0; top: 0; border-top-width: 1px; border-left-width: 1px; }
