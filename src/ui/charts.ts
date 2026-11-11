@@ -22,6 +22,7 @@ export interface ChartSpec {
   xTicks?: { value: number; label: string }[];
   bandLabels?: { x: number; label: string }[];
   clipWalls?: boolean;
+  legend?: boolean;
 }
 
 export function token(name: string): string {
@@ -36,7 +37,7 @@ export function createChart(host: HTMLElement, aspect = 1.7): { draw: (spec: Cha
   host.append(canvas, labels);
   let spec: ChartSpec | null = null;
   const placed: { x: number; y: number; w: number; h: number }[] = [];
-  const place = (text: string, x: number, y: number, color: string) => {
+  const place = (text: string, x: number, y: number, color: string, clamp = true): boolean => {
     const node = document.createElement('span');
     node.className = 'chart-label';
     node.textContent = text;
@@ -44,17 +45,25 @@ export function createChart(host: HTMLElement, aspect = 1.7): { draw: (spec: Cha
     labels.append(node);
     const w = node.offsetWidth;
     const h = node.offsetHeight || 12;
-    const left = Math.max(0, Math.min(x, host.clientWidth - w));
-    const top = Math.max(0, Math.min(y, host.clientHeight - h));
+    let left = x;
+    let top = y;
+    if (clamp) {
+      left = Math.max(0, Math.min(x, Math.max(0, host.clientWidth - w)));
+      top = Math.max(0, Math.min(y, Math.max(0, host.clientHeight - h)));
+    } else if (left < 0 || top < 0 || left + w > host.clientWidth + 1 || top + h > host.clientHeight + 1) {
+      node.remove();
+      return false;
+    }
     const box = { x: left, y: top, w, h };
     const hit = placed.some((prev) => box.x < prev.x + prev.w && box.x + box.w > prev.x && box.y < prev.y + prev.h && box.y + box.h > prev.y);
     if (hit) {
       node.remove();
-      return;
+      return false;
     }
     node.style.left = `${left}px`;
     node.style.top = `${top}px`;
     placed.push(box);
+    return true;
   };
   const drawNow = () => {
     if (!spec) return;
@@ -164,13 +173,32 @@ export function createChart(host: HTMLElement, aspect = 1.7): { draw: (spec: Cha
         if (line.label) place(line.label, left + 4, y - 14, line.color);
       }
     }
+    if (spec.legend) {
+      let cursor = left + plotW;
+      for (const series of [...spec.series].reverse()) {
+        cursor -= series.name.length * 7 + 10;
+        place(series.name, cursor, 2, series.color);
+      }
+    }
     if (spec.points) {
       for (const point of spec.points) {
+        const px = xOf(point.x);
+        const py = yOf(point.y);
         ctx.fillStyle = point.color;
         ctx.beginPath();
-        ctx.arc(xOf(point.x), yOf(point.y), 4, 0, Math.PI * 2);
+        ctx.arc(px, py, 4, 0, Math.PI * 2);
         ctx.fill();
-        if (point.label) place(point.label, xOf(point.x) + 6, yOf(point.y) - 14, point.color);
+        if (!point.label) continue;
+        const spots: [number, number][] = [
+          [px + 8, py - 16],
+          [px + 8, py + 8],
+          [px - 72, py - 16],
+          [left + 4, top + 16],
+          [left + plotW - 72, top + 16],
+        ];
+        for (const [x, y] of spots) {
+          if (place(point.label, x, y, point.color, false)) break;
+        }
       }
     }
     const ticks = spec.xTicks ?? [];

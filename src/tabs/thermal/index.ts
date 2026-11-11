@@ -1,16 +1,27 @@
 import { content } from '../../content';
+import { REFERENCE_AREAS } from '../../physics/references';
 import { thermalBudget, type ThermalInput } from '../../physics/thermal';
 import { openEquations, openSources } from '../../ui/drawer';
-import { fmtArea, fmtAreaSub, fmtSig, fmtTemp } from '../../ui/format';
-import { card, el } from '../../ui/readout';
-import { createButtonRow, createMoreDetail, createSegmented, createSlider, createToggle } from '../../ui/controls';
+import { fmtArea, fmtSig, fmtTemp } from '../../ui/format';
+import { bigNumber, card, el } from '../../ui/readout';
+import { createButtonRow, createCollapsible, createMoreDetail, createSegmented, createSlider, createToggle } from '../../ui/controls';
 import { setActiveView } from '../../engine/renderer';
 import { createThermalCharts } from './charts';
-import { createScalePanel } from './scalePanel';
 import { createThermalScene } from './scene';
 
-type SizeId = 'sat' | 'mw';
-type ScaleId = 'sat' | 'gw' | 'tw';
+type ScaleId = 'kw' | 'mw' | 'gw' | 'tw';
+
+const POWER: Record<ScaleId, number> = { kw: 120e3, mw: 1e6, gw: 1e9, tw: 1e12 };
+const SCALE_NAME: Record<ScaleId, string> = { kw: '120 kW', mw: '1 MW', gw: '1 GW', tw: '1 TW' };
+const FOOTPRINTS = REFERENCE_AREAS.filter((ref) => ref.id !== 'spacex');
+const FOOT_NAME: Record<string, string> = {
+  football: 'Football field',
+  centralpark: 'Central Park',
+  manhattan: 'Manhattan',
+  sf: 'San Francisco',
+  ri: 'Rhode Island',
+  ct: 'Connecticut',
+};
 
 interface ThermalState {
   tGpu: number;
@@ -23,7 +34,6 @@ interface ThermalState {
   pump: boolean;
   tHot: number;
   eta: number;
-  size: SizeId;
   scale: ScaleId;
 }
 
@@ -39,8 +49,7 @@ function defaults(): ThermalState {
     pump: false,
     tHot: 400,
     eta: 0.5,
-    size: 'sat',
-    scale: 'gw',
+    scale: 'kw',
   };
 }
 
@@ -55,43 +64,30 @@ function fmtPower(w: number): string {
 
 export function createThermalTab(summary: (text: string) => void) {
   const state = defaults();
-  const disc = el('div', 'disc-tag');
-  const scene = createThermalScene(disc);
+  const overlay = el('div', 'stage-overlay');
+  const caption = el('div', 'stage-caption');
+  const scene = createThermalScene(overlay);
   const charts = createThermalCharts();
-  const scalePanel = createScalePanel();
   const hud = el('div');
 
-  const power = card('Power and heat budget');
-  const rows = el('div');
-  const vs = el('div', 'sub');
-  power.body.append(rows, vs);
+  const hero = card('Total area');
+  hero.element.classList.add('hero');
+  const total = bigNumber(hero.body);
+  const stats = el('div', 'pair');
+  const radStat = el('div', 'num-lg');
+  const solStat = el('div', 'num-lg');
+  stats.append(labeled('Radiator', radStat), labeled('Solar', solStat));
+  const delta = el('div', 'delta');
+  delta.hidden = true;
+  hero.body.append(stats, delta);
 
-  const legend = el('div', 'legend-row');
-  legend.append(swatch('#c2341a', 'Radiator tile'), swatch('#16306e', 'Solar tile'), el('span', 'faint', '1 tile = 5 m²'));
-  const tileNote = legend.lastElementChild as HTMLElement;
-
-  const scaleSwitch = createSegmented<ScaleId>({
-    id: 'th-scale',
-    options: [
-      { value: 'sat', label: 'One satellite' },
-      { value: 'gw', label: '1 GW per year' },
-      { value: 'tw', label: '1 TW per year' },
-    ],
-    value: 'gw',
-    onChange: (value) => {
-      state.scale = value;
-      wrapped();
-    },
-  });
-  const scaleWrap = el('div');
-  scaleWrap.append(el('h2', 'section-title', 'How big is this?'), scaleSwitch.element, scalePanel.element);
-
-  const more = createMoreDetail('thermal', [legend, charts.detail, scaleWrap]);
-  hud.append(power.element, charts.element, more);
+  const table = el('div');
+  const more = createMoreDetail('thermal', [table, charts.detail]);
+  hud.append(hero.element, charts.element, more);
 
   const gpu = createSlider({
     id: 'th-gpu',
-    label: 'GPU temperature limit',
+    label: 'GPU limit',
     min: 330,
     max: 400,
     step: 1,
@@ -104,7 +100,7 @@ export function createThermalTab(summary: (text: string) => void) {
   });
   const drop = createSlider({
     id: 'th-dt',
-    label: 'Temperature drop from chip to radiator',
+    label: 'Chip-to-radiator drop',
     min: 5,
     max: 60,
     step: 1,
@@ -117,7 +113,7 @@ export function createThermalTab(summary: (text: string) => void) {
   });
   const eps = createSlider({
     id: 'th-eps',
-    label: 'Radiator emissivity',
+    label: 'Emissivity',
     min: 0.8,
     max: 1,
     step: 0.01,
@@ -130,7 +126,7 @@ export function createThermalTab(summary: (text: string) => void) {
   });
   const env = createSlider({
     id: 'th-env',
-    label: 'Heat landing on each radiator face',
+    label: 'Environment heat load',
     min: 0,
     max: 200,
     step: 0.1,
@@ -143,7 +139,7 @@ export function createThermalTab(summary: (text: string) => void) {
   });
   const pv = createSlider({
     id: 'th-pv',
-    label: 'Solar cell efficiency',
+    label: 'Cell efficiency',
     min: 0.15,
     max: 0.35,
     step: 0.01,
@@ -156,7 +152,7 @@ export function createThermalTab(summary: (text: string) => void) {
   });
   const pack = createSlider({
     id: 'th-pack',
-    label: 'Packing (fraction of array that is cells)',
+    label: 'Packing',
     min: 0.7,
     max: 1,
     step: 0.01,
@@ -169,7 +165,7 @@ export function createThermalTab(summary: (text: string) => void) {
   });
   const sun = createSlider({
     id: 'th-sun',
-    label: 'Fraction of each orbit in sunlight',
+    label: 'Sunlit fraction',
     min: 0.6,
     max: 1,
     step: 0.01,
@@ -182,7 +178,7 @@ export function createThermalTab(summary: (text: string) => void) {
   });
   const tHot = createSlider({
     id: 'th-hot',
-    label: 'Radiator temperature with heat pump',
+    label: 'Hot-side temperature',
     min: 333,
     max: 600,
     step: 1,
@@ -195,7 +191,7 @@ export function createThermalTab(summary: (text: string) => void) {
   });
   const eta = createSlider({
     id: 'th-eta',
-    label: 'How close to a perfect heat pump',
+    label: 'How close to ideal',
     min: 0.2,
     max: 1,
     step: 0.01,
@@ -219,49 +215,47 @@ export function createThermalTab(summary: (text: string) => void) {
   });
   tHot.element.hidden = true;
   eta.element.hidden = true;
-  const size = createSegmented<SizeId>({
-    id: 'th-size',
-    label: 'Compute size',
+  const scale = createSegmented<ScaleId>({
+    id: 'th-scale',
     options: [
-      { value: 'sat', label: 'One SpaceX AI satellite (120 kW)' },
+      { value: 'kw', label: '120 kW (1 satellite)' },
       { value: 'mw', label: '1 MW' },
+      { value: 'gw', label: '1 GW' },
+      { value: 'tw', label: '1 TW' },
     ],
-    value: 'sat',
+    value: 'kw',
     onChange: (value) => {
-      state.size = value;
+      state.scale = value;
       wrapped();
     },
   });
 
-  const controls = el('div');
-  controls.append(
-    size.element,
-    gpu.element,
-    drop.element,
+  const chips = el('div', 'section');
+  chips.append(el('h2', 'section-title', 'Chips'), gpu.element, drop.element);
+  const pumpBlock = el('div', 'section');
+  pumpBlock.append(el('h2', 'section-title', 'Heat pump'), pump.element, tHot.element, eta.element);
+  const advanced = createCollapsible('Advanced', [
     eps.element,
     env.element,
-    createButtonRow([
-      { label: 'Deep space (3 K): 0', onClick: () => env.setValue(0) },
-      { label: 'Best LEO case (from the Radiator tab): 57.7', onClick: () => env.setValue(57.7) },
-    ]),
+    createButtonRow(
+      [
+        { label: 'Deep space', onClick: () => env.setValue(0) },
+        { label: 'Best LEO', onClick: () => env.setValue(57.7) },
+      ],
+      'chips',
+    ),
     pv.element,
     pack.element,
     sun.element,
-    pump.element,
-    tHot.element,
-    eta.element,
-    el('div', 'footer-row'),
-  );
-  const footer = controls.querySelector('.footer-row') as HTMLElement;
+  ]);
+  const controls = el('div');
+  const footer = el('div', 'footer-row');
   footer.append(
     textButton('Assumptions & sources', () => openSources('Assumptions & sources', content.sources.thermal)),
     textButton('Equations', () => void openEquations('Equations', content.equations.thermal)),
     textButton('Reset view', () => scene.view().resetView()),
   );
-
-  function unitPower(): number {
-    return state.size === 'mw' ? 1e6 : 120e3;
-  }
+  controls.append(scale.element, chips, pumpBlock, advanced, footer);
 
   function inputFor(p: number): ThermalInput {
     const cold = state.tGpu - state.dT;
@@ -291,12 +285,9 @@ export function createThermalTab(summary: (text: string) => void) {
     pump.setValue(state.pump, true);
     tHot.setValue(state.tHot, true);
     eta.setValue(state.eta, true);
-    size.setValue(state.size, true);
-    scaleSwitch.setValue(state.scale, true);
+    scale.setValue(state.scale, true);
     tHot.element.hidden = !state.pump;
     eta.element.hidden = !state.pump;
-    const cold = state.tGpu - state.dT;
-    tHot.setRange(Math.min(600, cold + 1), 600, Math.max(cold + 1, Math.min(600, state.tHot)));
   }
 
   function recompute(): void {
@@ -304,44 +295,43 @@ export function createThermalTab(summary: (text: string) => void) {
     const hot = Math.max(cold + 1, Math.min(600, state.tHot));
     state.tHot = hot;
     tHot.setRange(Math.min(599, cold + 1), 600, hot);
-    const p = unitPower();
+    const p = POWER[state.scale];
     const input = inputFor(p);
     const result = thermalBudget(input);
     const bare = thermalBudget({ ...input, pump: false, T_hot: null });
-    let tile = state.size === 'mw' ? 40 : 5;
-    let nRad = Number.isFinite(result.A_rad) ? Math.ceil(result.A_rad / tile) : 0;
-    let nSol = Number.isFinite(result.A_sol) ? Math.ceil(result.A_sol / tile) : 0;
-    while (nRad + nSol > 4000) {
-      tile *= 1.5;
-      nRad = Math.ceil(result.A_rad / tile);
-      nSol = Math.ceil(result.A_sol / tile);
-    }
-    scene.setTileArea(tile);
-    scene.layout(nRad, nSol, result.A_tot, bare.A_tot, result.T_hot);
-    const diameter = 2 * Math.sqrt(result.A_tot / Math.PI);
-    disc.textContent = `Equivalent disc: ${fmtSig(diameter)} m across · ${fmtArea(result.A_tot)}`;
-    tileNote.textContent = `1 tile = ${fmtSig(tile, 2)} m²`;
-    rows.replaceChildren(
-      kv('Compute (IT load)', fmtPower(p)),
-      kv('Heat-pump power', `${fmtPower(result.W)} · +${fmtSig((100 * result.W) / p, 2)}% of compute`),
-      kv('Total electrical power', fmtPower(p + result.W)),
+    scene.layout({
+      aRad: result.A_rad,
+      aSol: result.A_sol,
+      aTot: result.A_tot,
+      aBare: bare.A_tot,
+      tHot: result.T_hot,
+      pump: state.pump,
+    });
+    total.set(fmtArea(result.A_tot));
+    radStat.textContent = fmtArea(result.A_rad);
+    solStat.textContent = fmtArea(result.A_sol);
+    const pct = Math.round((result.A_tot / bare.A_tot - 1) * 100);
+    delta.hidden = !state.pump;
+    delta.textContent = `vs. no heat pump: ${pct >= 0 ? '+' : ''}${pct}%`;
+    delta.className = pct > 0 ? 'delta bad' : pct < 0 ? 'delta good' : 'delta';
+    table.replaceChildren(
+      kv('Compute', fmtPower(p)),
+      kv('Pump power', fmtPower(result.W)),
+      kv('Electrical', fmtPower(p + result.W)),
       kv('Heat to dump', fmtPower(result.Q_reject)),
-      kv('Radiator temperature', `${fmtTemp(result.T_hot).main} · ${fmtTemp(result.T_hot).sub}`),
-      kv('Heat shed per m² of radiator (both faces)', `${fmtSig(result.q_net)} W/m²`),
-      kv('Radiator area', areaText(result.A_rad), true),
-      kv('Solar area', areaText(result.A_sol), true),
-      kv('Total area', areaText(result.A_tot), true),
+      kv('Radiator temperature', fmtTemp(result.T_hot).main),
+      kv('Flux', `${fmtSig(result.q_net)} W/m²`),
     );
-    const pct = (result.A_tot / bare.A_tot - 1) * 100;
-    const sign = pct >= 0 ? '+' : '';
-    vs.textContent = `vs. no heat pump: ${sign}${pct.toFixed(1)}%`;
-    vs.className = pct > 0.05 ? 'sub bad' : pct < -0.05 ? 'sub good' : 'sub';
     charts.update(input, result.T_hot);
-    const scaleP = state.scale === 'tw' ? 1e12 : state.scale === 'gw' ? 1e9 : p;
-    const scaled = thermalBudget(inputFor(scaleP));
-    const label = state.scale === 'tw' ? '1 TW per year' : state.scale === 'gw' ? '1 GW per year' : 'One satellite';
-    scalePanel.set(scaled.A_tot, label, state.scale !== 'sat');
-    summary(`${fmtArea(result.A_tot)} total · ${fmtPower(p)}`);
+    const closest = FOOTPRINTS.reduce((best, ref) => {
+      const score = Math.abs(Math.log(ref.m2 / result.A_tot));
+      return score < best.score ? { score, ref } : best;
+    }, { score: Infinity, ref: FOOTPRINTS[0]! });
+    const k = result.A_tot / closest.ref.m2;
+    const kText = k >= 10 ? String(Math.round(k)) : k.toFixed(1);
+    const yearly = state.scale === 'kw' ? '' : ' · deployed every year';
+    caption.textContent = `${SCALE_NAME[state.scale]}: ${fmtArea(result.A_tot)} of solar + radiator ≈ ${kText}× ${FOOT_NAME[closest.ref.id] ?? closest.ref.label}${yearly}`;
+    summary(`${fmtArea(result.A_tot)} · ${SCALE_NAME[state.scale]}`);
   }
 
   let urlTimer = 0;
@@ -359,8 +349,7 @@ export function createThermalTab(summary: (text: string) => void) {
       if (state.pump) params.set('pump', '1');
       if (state.pump && state.tHot !== 400) params.set('Thot', String(Math.round(state.tHot)));
       if (state.pump && state.eta !== 0.5) params.set('eta', String(state.eta));
-      if (state.size !== 'sat') params.set('size', state.size);
-      if (state.scale !== 'gw') params.set('scale', state.scale);
+      if (state.scale !== 'kw') params.set('scale', state.scale);
       const qs = params.toString();
       const next = `#/thermal${qs ? `?${qs}` : ''}`;
       if (location.hash !== next) history.replaceState(null, '', next);
@@ -376,13 +365,14 @@ export function createThermalTab(summary: (text: string) => void) {
     hud,
     controls,
     show() {
-      document.getElementById('stage')?.append(disc);
+      document.getElementById('stage')?.append(overlay, caption);
       scene.rebind();
       setActiveView(scene.view());
       wrapped();
     },
     hide() {
-      disc.remove();
+      overlay.remove();
+      caption.remove();
       scene.detach();
     },
     reset() {
@@ -401,32 +391,26 @@ export function createThermalTab(summary: (text: string) => void) {
       next.pump = params.get('pump') === '1';
       next.tHot = num('Thot', 400);
       next.eta = num('eta', 0.5);
-      if (params.get('size') === 'mw') next.size = 'mw';
-      const scale = params.get('scale');
-      if (scale === 'sat' || scale === 'gw' || scale === 'tw') next.scale = scale;
+      const scaleId = params.get('scale');
+      if (scaleId === 'mw' || scaleId === 'gw' || scaleId === 'tw' || scaleId === 'kw') next.scale = scaleId;
+      else if (scaleId === 'sat') next.scale = 'kw';
+      else if (params.get('size') === 'mw') next.scale = 'mw';
       Object.assign(state, next);
       paint();
     },
   };
 }
 
-function kv(label: string, value: string, strong = false): HTMLElement {
-  const row = el('div', 'kv');
-  row.append(el('span', '', label), el(strong ? 'b' : 'span', '', value));
-  return row;
-}
-
-function areaText(m2: number): string {
-  const sub = fmtAreaSub(m2);
-  return sub ? `${fmtArea(m2)} · ${sub}` : fmtArea(m2);
-}
-
-function swatch(color: string, label: string): HTMLElement {
-  const node = el('span', 'faint');
-  const mark = el('i', 'swatch');
-  mark.style.background = color;
-  node.append(mark, document.createTextNode(label));
+function labeled(label: string, value: HTMLElement): HTMLElement {
+  const node = el('div');
+  node.append(el('div', 'field-label', label), value);
   return node;
+}
+
+function kv(label: string, value: string): HTMLElement {
+  const row = el('div', 'kv');
+  row.append(el('span', '', label), el('span', '', value));
+  return row;
 }
 
 function textButton(label: string, onClick: () => void): HTMLButtonElement {

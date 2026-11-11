@@ -226,6 +226,35 @@
   .scale-tag, .disc-tag { max-width: 40%; }
 }
 .stage-overlay { position: absolute; inset: 0; z-index: 3; pointer-events: none; overflow: hidden; }
+.world-tag {
+  position: absolute;
+  z-index: 3;
+  font-size: 13px;
+  line-height: 16px;
+  color: var(--text);
+  white-space: nowrap;
+  pointer-events: none;
+  transform: translate(-50%, -100%);
+}
+.stage-caption {
+  position: absolute;
+  z-index: 4;
+  left: 128px;
+  right: 12px;
+  bottom: 12px;
+  font-size: 13px;
+  line-height: 16px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+.pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 8px; }
+.delta { display: inline-block; margin-top: 8px; padding: 4px 8px; border-radius: 999px; font-size: 13px; }
+.delta.bad { color: var(--bad); background: rgba(255, 77, 77, 0.14); }
+.delta.good { color: var(--good); background: rgba(61, 220, 151, 0.14); }
+.area-leaders line { stroke: rgba(197, 204, 214, 0.85); }
 .reticle { position: absolute; }
 .reticle i { position: absolute; width: 8px; height: 8px; border: 0 solid #5ce1ff; }
 .reticle i:nth-child(1) { left: 0; top: 0; border-top-width: 1px; border-left-width: 1px; }

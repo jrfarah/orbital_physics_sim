@@ -1,6 +1,5 @@
 import { qNetBothFaces, thermalBudget, type ThermalInput } from '../../physics/thermal';
 import { createChart } from '../../ui/charts';
-import { fmtSig } from '../../ui/format';
 import { el } from '../../ui/readout';
 
 export function createThermalCharts(): {
@@ -14,7 +13,7 @@ export function createThermalCharts(): {
   const bHost = el('div');
   const aNote = el('div', 'caption');
   const bNote = el('div', 'caption');
-  detail.append(el('h2', 'section-title', 'Heat shed per m² vs radiator temperature'), aHost, aNote);
+  detail.append(el('h2', 'section-title', 'Why only a factor of a few?'), aHost, aNote);
   element.append(el('h2', 'section-title', 'Does a heat pump help?'), bHost, bNote);
   const chartA = createChart(aHost, 1.7);
   const chartB = createChart(bHost, 1.7);
@@ -44,14 +43,12 @@ export function createThermalCharts(): {
         points: [{ x: tHot, y: qNetBothFaces(tHot, input.eps ?? 0.9, input.q_env_face ?? 57.7), color: '#e6edf5', label: 'You are here' }],
       });
       const ratio = q250 > 0 ? qCold / q250 : Infinity;
-      aNote.textContent = `Going from 250 K to the chip limit changes this by ×${fmtSig(ratio)}`;
+      aNote.textContent = Number.isFinite(ratio) ? `250 K → chip limit: ×${ratio.toFixed(1)}` : '250 K → chip limit';
 
       const tx: number[] = [];
       const rad: number[] = [];
       const sol: number[] = [];
       const tot: number[] = [];
-      let bestT = cold;
-      let bestA = Infinity;
       for (let i = 0; i <= 80; i++) {
         const t = cold + ((600 - cold) * i) / 80;
         const row = thermalBudget({ ...input, pump: true, T_hot: t });
@@ -59,10 +56,6 @@ export function createThermalCharts(): {
         rad.push(row.A_rad);
         sol.push(row.A_sol);
         tot.push(row.A_tot);
-        if (row.A_tot < bestA) {
-          bestA = row.A_tot;
-          bestT = t;
-        }
       }
       const here = thermalBudget({ ...input, pump: true, T_hot: tHot });
       const finite = tot.filter((v) => Number.isFinite(v));
@@ -70,21 +63,20 @@ export function createThermalCharts(): {
       chartB.draw({
         xDomain: [cold, 600],
         yDomain: [0, yMax],
-        xLabel: 'Radiator temperature (K)',
+        xLabel: 'Temperature (K)',
         yLabel: 'Area (m²)',
+        legend: true,
         series: [
           { name: 'Radiator', color: '#c5ccd6', xs: tx, ys: rad },
           { name: 'Solar', color: '#2a5bd7', xs: tx, ys: sol },
           { name: 'Total', color: '#5ce1ff', xs: tx, ys: tot, width: 3 },
         ],
-        hLines: [{ y: base.A_sol, color: '#9aa9bb', label: 'Solar alone (radiator area → 0)' }],
         points: [
-          { x: cold, y: base.A_tot, color: '#9aa9bb', label: 'no heat pump' },
-          { x: here.T_hot, y: here.A_tot, color: '#e6edf5', label: 'you are here' },
+          { x: here.T_hot, y: here.A_tot, color: '#e6edf5', label: 'you' },
+          { x: cold, y: base.A_tot, color: '#9aa9bb', label: 'no pump' },
         ],
       });
-      bNote.textContent =
-        bestT <= cold + 1 ? 'Best choice: no heat pump' : `Best choice: radiator at ${fmtSig(bestT)} K`;
+      bNote.textContent = '';
     },
   };
 }
