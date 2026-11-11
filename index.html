@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#05070c" />
+    <title>Orbital Data Centers · The Physics</title>
+  </head>
+  <body>
+    <div id="app">
+      <header id="topbar">
+        <h1 id="site-title"></h1>
+        <nav id="tabbar" aria-label="Sections"></nav>
+        <button id="copy-link" type="button" aria-label="Copy link">
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+            <path fill="none" stroke="currentColor" stroke-width="1.7" d="M10 13a5 5 0 0 0 7.1.1l1.4-1.4a5 5 0 0 0-7.1-7.1L10 6" />
+            <path fill="none" stroke="currentColor" stroke-width="1.7" d="M14 11a5 5 0 0 0-7.1-.1L5.5 12.3a5 5 0 0 0 7.1 7.1L14 18" />
+          </svg>
+        </button>
+      </header>
+      <div id="stage">
+        <div id="canvas-host"></div>
+        <div id="takeaway" hidden></div>
+        <div id="hud"></div>
+        <aside id="panel"></aside>
+        <div id="sheet" hidden></div>
+      </div>
+    </div>
+    <div id="toast" role="status"></div>
+    <button id="gl-overlay" type="button" hidden>Graphics reset – tap to reload</button>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

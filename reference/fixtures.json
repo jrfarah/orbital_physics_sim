@@ -1,0 +1,444 @@
+{
+ "view_factor": {
+  "500km_0deg": 0.859756,
+  "500km_45deg": 0.635264,
+  "500km_90deg": 0.267287,
+  "500km_120deg": 0.0818396,
+  "1000km_0deg": 0.747072,
+  "1000km_45deg": 0.537117,
+  "1000km_90deg": 0.193893,
+  "1000km_120deg": 0.0438729,
+  "2000km_0deg": 0.579243,
+  "2000km_45deg": 0.410029,
+  "2000km_90deg": 0.118187,
+  "2000km_120deg": 0.0146746
+ },
+ "radiator": {
+  "dawn_dusk_edge_on_500": {
+   "A": {
+    "F": 0.267287,
+    "q_sun": 0.0,
+    "q_alb": 0.0,
+    "q_ir": 64.149,
+    "q_cmb": 2.29261e-06,
+    "q_abs": 64.149,
+    "T_sink": 183.398,
+    "q_emit": 594.582,
+    "q_net": 530.433
+   },
+   "B": {
+    "F": 0.267287,
+    "q_sun": 0.0,
+    "q_alb": 0.0,
+    "q_ir": 64.149,
+    "q_cmb": 2.29261e-06,
+    "q_abs": 64.149,
+    "T_sink": 183.398,
+    "q_emit": 594.582,
+    "q_net": 530.433
+   },
+   "total_net": 1060.87,
+   "ideal": 1189.16
+  },
+  "noon_flat_500": {
+   "A": {
+    "F": 0.0,
+    "q_sun": 1361.0,
+    "q_alb": 0.0,
+    "q_ir": 0.0,
+    "q_cmb": 3.12893e-06,
+    "q_abs": 1361.0,
+    "T_sink": 393.606,
+    "q_emit": 594.582,
+    "q_net": -766.418
+   },
+   "B": {
+    "F": 0.859756,
+    "q_sun": 0.0,
+    "q_alb": 351.038,
+    "q_ir": 206.341,
+    "q_cmb": 4.38814e-07,
+    "q_abs": 557.38,
+    "T_sink": 314.873,
+    "q_emit": 594.582,
+    "q_net": 37.2019
+   },
+   "total_net": -729.216,
+   "ideal": 1189.16
+  },
+  "terminator_faceA_zenith_500": {
+   "A": {
+    "F": 0.0,
+    "q_sun": 0.0,
+    "q_alb": 0.0,
+    "q_ir": 0.0,
+    "q_cmb": 3.12893e-06,
+    "q_abs": 3.12893e-06,
+    "T_sink": 2.7255,
+    "q_emit": 594.582,
+    "q_net": 594.582
+   },
+   "B": {
+    "F": 0.859756,
+    "q_sun": 0.0,
+    "q_alb": 0.0,
+    "q_ir": 206.341,
+    "q_cmb": 4.38814e-07,
+    "q_abs": 206.341,
+    "T_sink": 245.609,
+    "q_emit": 594.582,
+    "q_net": 388.24
+   },
+   "total_net": 982.822,
+   "ideal": 1189.16
+  },
+  "noon_edge_on_500": {
+   "A": {
+    "F": 0.267287,
+    "q_sun": 0.0,
+    "q_alb": 109.133,
+    "q_ir": 64.149,
+    "q_cmb": 2.29261e-06,
+    "q_abs": 173.282,
+    "T_sink": 235.118,
+    "q_emit": 594.582,
+    "q_net": 421.299
+   },
+   "B": {
+    "F": 0.267287,
+    "q_sun": 0.0,
+    "q_alb": 109.133,
+    "q_ir": 64.149,
+    "q_cmb": 2.29261e-06,
+    "q_abs": 173.282,
+    "T_sink": 235.118,
+    "q_emit": 594.582,
+    "q_net": 421.299
+   },
+   "total_net": 842.599,
+   "ideal": 1189.16
+  },
+  "dawn_dusk_edge_on_2000": {
+   "A": {
+    "F": 0.118187,
+    "q_sun": 0.0,
+    "q_alb": 0.0,
+    "q_ir": 28.3649,
+    "q_cmb": 2.75913e-06,
+    "q_abs": 28.3649,
+    "T_sink": 149.552,
+    "q_emit": 594.582,
+    "q_net": 566.217
+   },
+   "B": {
+    "F": 0.118187,
+    "q_sun": 0.0,
+    "q_alb": 0.0,
+    "q_ir": 28.3649,
+    "q_cmb": 2.75913e-06,
+    "q_abs": 28.3649,
+    "T_sink": 149.552,
+    "q_emit": 594.582,
+    "q_net": 566.217
+   },
+   "total_net": 1132.43,
+   "ideal": 1189.16
+  },
+  "dawn_dusk_edge_on_500_whitepaint": {
+   "A": {
+    "F": 0.267287,
+    "q_sun": 0.0,
+    "q_alb": 0.0,
+    "q_ir": 64.149,
+    "q_cmb": 2.29261e-06,
+    "q_abs": 57.7341,
+    "T_sink": 183.398,
+    "q_emit": 535.124,
+    "q_net": 477.39
+   },
+   "B": {
+    "F": 0.267287,
+    "q_sun": 0.0,
+    "q_alb": 0.0,
+    "q_ir": 64.149,
+    "q_cmb": 2.29261e-06,
+    "q_abs": 57.7341,
+    "T_sink": 183.398,
+    "q_emit": 535.124,
+    "q_net": 477.39
+   },
+   "total_net": 954.779,
+   "ideal": 1070.25
+  }
+ },
+ "cmb_flux": 3.12893e-06,
+ "thermal": {
+  "no_pump": {
+   "T_cold": 333.0,
+   "T_hot": 333.0,
+   "W": 0.0,
+   "Q_reject": 1.0,
+   "q_net": 1139.65,
+   "A_rad": 0.000877462,
+   "A_sol": 0.00371088,
+   "A_tot": 0.00458834
+  },
+  "pump_400K_eta0.5": {
+   "T_cold": 333.0,
+   "T_hot": 400.0,
+   "W": 0.402402,
+   "Q_reject": 1.4024,
+   "q_net": 2497.51,
+   "A_rad": 0.000561521,
+   "A_sol": 0.00520414,
+   "A_tot": 0.00576566
+  },
+  "pump_500K_eta0.5": {
+   "T_cold": 333.0,
+   "T_hot": 500.0,
+   "W": 1.003,
+   "Q_reject": 2.003,
+   "q_net": 6263.77,
+   "A_rad": 0.000319776,
+   "A_sol": 0.0074329,
+   "A_tot": 0.00775268
+  },
+  "pump_400K_eta1.0": {
+   "T_cold": 333.0,
+   "T_hot": 400.0,
+   "W": 0.201201,
+   "Q_reject": 1.2012,
+   "q_net": 2497.51,
+   "A_rad": 0.00048096,
+   "A_sol": 0.00445751,
+   "A_tot": 0.00493847
+  }
+ },
+ "sigma_screen_km2": 0.873092,
+ "tau_yr": {
+  "525": 3.69963,
+  "725": 41.1767,
+  "825": 137.372,
+  "975": 837.08,
+  "1225": 10000.0
+ },
+ "kessler": {
+  "starlink_today": {
+   "N": 9000,
+   "A_sat": 116,
+   "m_sat": 800,
+   "span_m": 26.6552,
+   "launches_per_yr": 1800.0,
+   "cam_per_month": 34525.3,
+   "cam_ratio_vs_starlink": 1.0,
+   "kills_per_yr": 7.86547,
+   "derelicts": 112.78,
+   "collisions_per_yr": 0.578823,
+   "fragments_per_yr": 64.8282,
+   "small_fragments_per_yr": 3259.96,
+   "worst_rate_per_sat_per_yr": 0.000954971,
+   "linear_regime_ok": true,
+   "R0_by_shell": {
+    "525": 0.0224334,
+    "575": 0.0522757
+   },
+   "R0_max": 0.0522757,
+   "cost_per_sat": 800000.0,
+   "planned_replacement_usd_per_yr": 1440000000.0,
+   "unplanned_loss_usd_per_yr": 6719410.0,
+   "rtt_ms_max": 4.00277
+  },
+  "1GW_spacex": {
+   "N": 41666.7,
+   "A_sat": 800.0,
+   "m_sat": 3000.0,
+   "span_m": 70.0,
+   "launches_per_yr": 8333.33,
+   "cam_per_month": 249908.0,
+   "cam_ratio_vs_starlink": 7.23839,
+   "kills_per_yr": 993.355,
+   "derelicts": 9969.08,
+   "collisions_per_yr": 268.97,
+   "fragments_per_yr": 30124.6,
+   "small_fragments_per_yr": 1514850.0,
+   "worst_rate_per_sat_per_yr": 0.0359633,
+   "linear_regime_ok": true,
+   "R0_by_shell": {
+    "525": 0.521925,
+    "725": 20.9039,
+    "775": 56.0661,
+    "825": 124.736,
+    "875": 228.3,
+    "925": 345.608,
+    "975": 440.77
+   },
+   "R0_max": 440.77,
+   "cost_per_sat": 6600000.0,
+   "planned_replacement_usd_per_yr": 55000000000.0,
+   "unplanned_loss_usd_per_yr": 6770230000.0,
+   "rtt_ms_max": 6.67128
+  },
+  "500GW_spacex": {
+   "N": 20833300.0,
+   "A_sat": 800.0,
+   "m_sat": 3000.0,
+   "span_m": 70.0,
+   "launches_per_yr": 4166670.0,
+   "cam_per_month": 45917000000.0,
+   "cam_ratio_vs_starlink": 1329950.0,
+   "kills_per_yr": 496678.0,
+   "derelicts": 4984540.0,
+   "collisions_per_yr": 39503700.0,
+   "fragments_per_yr": 4424410000.0,
+   "small_fragments_per_yr": 222487000000.0,
+   "worst_rate_per_sat_per_yr": 0.373507,
+   "linear_regime_ok": false,
+   "R0_by_shell": {
+    "525": 260.963,
+    "725": 10452.0,
+    "775": 28033.0,
+    "825": 62368.2,
+    "875": 114150.0,
+    "925": 172804.0,
+    "975": 220385.0
+   },
+   "R0_max": 220385.0,
+   "cost_per_sat": 6600000.0,
+   "planned_replacement_usd_per_yr": 27500000000000.0,
+   "unplanned_loss_usd_per_yr": 50801600000000.0,
+   "rtt_ms_max": 6.67128
+  },
+  "1TW_spacex": {
+   "N": 41666700.0,
+   "A_sat": 800.0,
+   "m_sat": 3000.0,
+   "span_m": 70.0,
+   "launches_per_yr": 8333330.0,
+   "cam_per_month": 183601000000.0,
+   "cam_ratio_vs_starlink": 5317880.0,
+   "kills_per_yr": 993355.0,
+   "derelicts": 9969080.0,
+   "collisions_per_yr": 157904000.0,
+   "fragments_per_yr": 17685200000.0,
+   "small_fragments_per_yr": 889320000000.0,
+   "worst_rate_per_sat_per_yr": 0.746883,
+   "linear_regime_ok": false,
+   "R0_by_shell": {
+    "525": 521.925,
+    "725": 20903.9,
+    "775": 56066.1,
+    "825": 124736.0,
+    "875": 228300.0,
+    "925": 345608.0,
+    "975": 440770.0
+   },
+   "R0_max": 440770.0,
+   "cost_per_sat": 6600000.0,
+   "planned_replacement_usd_per_yr": 55000000000000.0,
+   "unplanned_loss_usd_per_yr": 196626000000000.0,
+   "rtt_ms_max": 6.67128
+  },
+  "1GW_low": {
+   "N": 41666.7,
+   "A_sat": 800.0,
+   "m_sat": 3000.0,
+   "span_m": 70.0,
+   "launches_per_yr": 8333.33,
+   "cam_per_month": 1351750.0,
+   "cam_ratio_vs_starlink": 39.1526,
+   "kills_per_yr": 227.848,
+   "derelicts": 1074.12,
+   "collisions_per_yr": 166.988,
+   "fragments_per_yr": 18702.7,
+   "small_fragments_per_yr": 940486.0,
+   "worst_rate_per_sat_per_yr": 0.00546836,
+   "linear_regime_ok": true,
+   "R0_by_shell": {
+    "525": 2.60963
+   },
+   "R0_max": 2.60963,
+   "cost_per_sat": 6600000.0,
+   "planned_replacement_usd_per_yr": 55000000000.0,
+   "unplanned_loss_usd_per_yr": 2527370000.0,
+   "rtt_ms_max": 3.66921
+  },
+  "1GW_low_bestcase": {
+   "N": 41666.7,
+   "A_sat": 800.0,
+   "m_sat": 3000.0,
+   "span_m": 70.0,
+   "launches_per_yr": 8333.33,
+   "cam_per_month": 28589.4,
+   "cam_ratio_vs_starlink": 0.82807,
+   "kills_per_yr": 113.924,
+   "derelicts": 422.0,
+   "collisions_per_yr": 2.40355,
+   "fragments_per_yr": 269.197,
+   "small_fragments_per_yr": 13536.9,
+   "worst_rate_per_sat_per_yr": 0.00273418,
+   "linear_regime_ok": true,
+   "R0_by_shell": {
+    "525": 0.746008
+   },
+   "R0_max": 0.746008,
+   "cost_per_sat": 6600000.0,
+   "planned_replacement_usd_per_yr": 55000000000.0,
+   "unplanned_loss_usd_per_yr": 752247000.0,
+   "rtt_ms_max": 3.66921
+  },
+  "1TW_low_bestcase": {
+   "N": 41666700.0,
+   "A_sat": 800.0,
+   "m_sat": 3000.0,
+   "span_m": 70.0,
+   "launches_per_yr": 8333330.0,
+   "cam_per_month": 13380500000.0,
+   "cam_ratio_vs_starlink": 387557.0,
+   "kills_per_yr": 113924.0,
+   "derelicts": 422000.0,
+   "collisions_per_yr": 1549910.0,
+   "fragments_per_yr": 173590000.0,
+   "small_fragments_per_yr": 8729170000.0,
+   "worst_rate_per_sat_per_yr": 0.00273418,
+   "linear_regime_ok": true,
+   "R0_by_shell": {
+    "525": 746.008
+   },
+   "R0_max": 746.008,
+   "cost_per_sat": 6600000.0,
+   "planned_replacement_usd_per_yr": 55000000000000.0,
+   "unplanned_loss_usd_per_yr": 1044880000000.0,
+   "rtt_ms_max": 3.66921
+  },
+  "1TW_spacex_5MWsats": {
+   "N": 1000000.0,
+   "A_sat": 33333.3,
+   "m_sat": 125000.0,
+   "span_m": 451.848,
+   "launches_per_yr": 200000.0,
+   "cam_per_month": 115292000.0,
+   "cam_ratio_vs_starlink": 3339.34,
+   "kills_per_yr": 993355.0,
+   "derelicts": 9289140.0,
+   "collisions_per_yr": 4747820000.0,
+   "fragments_per_yr": 531755000000.0,
+   "small_fragments_per_yr": 26739900000000.0,
+   "worst_rate_per_sat_per_yr": 12.9383,
+   "linear_regime_ok": false,
+   "R0_by_shell": {
+    "525": 11719.3,
+    "725": 755609.0,
+    "775": 2121000.0,
+    "825": 4802350.0,
+    "875": 8793250.0,
+    "925": 13096800.0,
+    "975": 16009100.0
+   },
+   "R0_max": 16009100.0,
+   "cost_per_sat": 275000000.0,
+   "planned_replacement_usd_per_yr": 55000000000000.0,
+   "unplanned_loss_usd_per_yr": 2617680000000000.0,
+   "rtt_ms_max": 6.67128
+  }
+ }
+}
