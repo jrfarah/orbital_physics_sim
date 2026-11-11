@@ -1,7 +1,7 @@
 import { content } from '../../content';
 import { openEquations, openSources } from '../../ui/drawer';
 import { fmtSig } from '../../ui/format';
-import { createMoreDetail } from '../../ui/controls';
+import { createMoreDetail, createSegmented } from '../../ui/controls';
 import { bigNumber, card, el } from '../../ui/readout';
 import { coalesce } from '../../ui/batch';
 import { requestRender, setActiveView, isMobile } from '../../engine/renderer';
@@ -23,6 +23,32 @@ import { createRadiatorScene } from './scene';
 import { createSpectrumCard } from './spectrumChart';
 
 const DEG = Math.PI / 180;
+
+function placeCompareLabels(marks: { node: HTMLElement; pct: number }[], width: number): void {
+  const ordered = [...marks].sort((a, b) => a.pct - b.pct);
+  const rights: number[] = [];
+  let rows = 1;
+  for (const mark of ordered) {
+    const textWidth = Math.ceil((mark.node.textContent?.length ?? 4) * 8);
+    const half = textWidth / 2;
+    const center = Math.min(Math.max(half, (mark.pct / 100) * width), Math.max(half, width - half));
+    const left = center - half;
+    let row = rights.findIndex((right) => left > right + 8);
+    if (row < 0) {
+      row = rights.length;
+      rights.push(-1e9);
+    }
+    rights[row] = left + textWidth;
+    rows = Math.max(rows, row + 1);
+    mark.node.style.setProperty('--row', String(row));
+    mark.node.style.left = `${center}px`;
+  }
+  markHost(ordered[0]?.node)?.style.setProperty('--mark-rows', String(rows));
+}
+
+function markHost(node: HTMLElement | undefined): HTMLElement | null {
+  return node?.parentElement ?? null;
+}
 
 export function createRadiatorTab(summary: (text: string) => void) {
   const state: RadiatorControlState & { face: 'A' | 'B' } = {
@@ -51,10 +77,13 @@ export function createRadiatorTab(summary: (text: string) => void) {
   const dot = el('div', 'dot');
   const env = el('div', 'tick amber');
   const ideal = el('div', 'tick dim');
+  const capThis = el('div', 'cap high', 'This');
+  const capEnv = el('div', 'cap high', '1 kW/m² estimate');
+  const capIdeal = el('div', 'cap high', '3 K-sky ideal');
   const sentence = el('div', 'sub');
   const warning = el('div', 'caption bad', 'Absorbing more than it sheds.');
   warning.hidden = true;
-  compare.append(track, dot, env, ideal);
+  compare.append(track, dot, env, ideal, capThis, capEnv, capIdeal);
   key.body.append(keyNum.el, compare, sentence, warning);
 
   const breakdown = el('div');
@@ -65,8 +94,18 @@ export function createRadiatorTab(summary: (text: string) => void) {
   const legend = createHeatLegend();
   const spectrum = createSpectrumCard();
   const foot = el('div', 'faint');
-  const more = createMoreDetail('radiator', [legend, breakdown, spectrum.element, foot]);
-  hud.append(key.element, faces, more);
+  const more = createMoreDetail('radiator', [breakdown, foot]);
+  hud.append(key.element, faces, legend.element, spectrum.element, more);
+  const cameraPick = createSegmented<'overview' | 'sat'>({
+    id: 'rad-camera',
+    options: [
+      { value: 'overview', label: 'Overview' },
+      { value: 'sat', label: 'From the satellite' },
+    ],
+    value: 'sat',
+    onChange: (value) => scene.setPreset(value),
+  });
+  cameraPick.element.classList.add('stage-presets');
 
   const panel = createRadiatorPanel({
     state,
@@ -139,10 +178,18 @@ export function createRadiatorTab(summary: (text: string) => void) {
     keyNum.set(`${fmtSig(total)} W/m²`);
     keyNum.el.classList.toggle('bad', total < 0);
     const scaleMax = Math.max(result.ideal, 1200, Math.max(total, 0));
-    const at = (v: number) => `${Math.min(100, Math.max(0, (v / scaleMax) * 100))}%`;
-    dot.style.left = at(total);
-    env.style.left = at(content.backOfEnvelopeWm2);
-    ideal.style.left = at(result.ideal);
+    const at = (v: number) => Math.min(100, Math.max(0, (v / scaleMax) * 100));
+    dot.style.left = `${at(total)}%`;
+    env.style.left = `${at(content.backOfEnvelopeWm2)}%`;
+    ideal.style.left = `${at(result.ideal)}%`;
+    placeCompareLabels(
+      [
+        { node: capThis, pct: at(total) },
+        { node: capEnv, pct: at(content.backOfEnvelopeWm2) },
+        { node: capIdeal, pct: at(result.ideal) },
+      ],
+      compare.clientWidth || 300,
+    );
     const pct = Math.round((100 * total) / content.backOfEnvelopeWm2);
     const pct2 = Math.round((100 * total) / result.ideal);
     sentence.textContent = `${pct}% of the estimate`;
@@ -151,6 +198,7 @@ export function createRadiatorTab(summary: (text: string) => void) {
     warning.hidden = total >= 0;
     paintFaceCard(faceA, 'A', result.A);
     paintFaceCard(faceB, 'B', result.B);
+    legend.setMarkers(result.A.T_sink, result.B.T_sink);
     const selected = state.face === 'A' ? result.A : result.B;
     spectrum.setFace(state.face, selected, coat.eps, state.tempK);
     const sky = Math.round(earthSkyFraction(state.hKm) * 100);
@@ -162,9 +210,9 @@ export function createRadiatorTab(summary: (text: string) => void) {
 
   function paintFaceCard(face: ReturnType<typeof faceCard>, which: 'A' | 'B', flux: ReturnType<typeof radiator>['A']): void {
     face.root.classList.toggle('selected', state.face === which);
-    paintFace(face.canvas, Math.min(1, Math.max(0, (flux.T_sink - 150) / 250)));
+    paintFace(face.canvas, Math.min(1, Math.max(0, (flux.T_sink - 1) / 399)));
     const temp = flux.T_sink;
-    face.temp.textContent = `${fmtSig(temp)} K`;
+    face.temp.textContent = `Sees ${fmtSig(temp)} K`;
     face.celsius.textContent = `${Math.round(temp - 273)} °C`;
     const parts = [
       { v: flux.q_sun, color: '#ffd36b', name: 'Sunlight' },
@@ -179,6 +227,19 @@ export function createRadiatorTab(summary: (text: string) => void) {
       const seg = el('i');
       seg.style.width = `${(part.v / sum) * 100}%`;
       seg.style.background = part.color;
+      const tip = el('div', 'tip', `${part.name}: ${fmtSig(part.v)} W/m²`);
+      tip.hidden = true;
+      seg.append(tip);
+      const show = (event: Event) => {
+        event.stopPropagation();
+        for (const other of face.stack.querySelectorAll('.tip')) other.toggleAttribute('hidden', other !== tip);
+        tip.hidden = false;
+      };
+      seg.addEventListener('pointerenter', show);
+      seg.addEventListener('pointerleave', () => {
+        tip.hidden = true;
+      });
+      seg.addEventListener('click', show);
       face.stack.append(seg);
       face.legend.append(el('div', 'faint', `${part.name}: ${fmtSig(part.v)} W/m²`));
     }
@@ -199,6 +260,7 @@ export function createRadiatorTab(summary: (text: string) => void) {
     breakdown.append(legendRow);
     root.addEventListener('click', () => {
       state.face = which;
+      spectrum.open();
       recompute();
     });
     return { root, canvas, temp, celsius, stack, legend: legendRow, shed };
@@ -231,9 +293,10 @@ export function createRadiatorTab(summary: (text: string) => void) {
   return {
     hud,
     controls: panel.element,
+    corner: cameraPick.element,
     tag,
     show() {
-      document.getElementById('stage')?.append(tag);
+      document.getElementById('stage')?.append(tag, scene.overlay);
       scene.rebind();
       const view = scene.view();
       setActiveView(view);
@@ -241,6 +304,7 @@ export function createRadiatorTab(summary: (text: string) => void) {
     },
     hide() {
       tag.remove();
+      scene.overlay.remove();
       scene.detach();
     },
     reset() {

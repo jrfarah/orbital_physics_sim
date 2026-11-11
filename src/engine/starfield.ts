@@ -12,7 +12,7 @@ function mulberry32(seed: number): () => number {
 }
 
 export function createStarfield(mobile: boolean): Points {
-  const n = mobile ? 800 : 1500;
+  const n = mobile ? 500 : 900;
   const rng = mulberry32(0x51a5);
   const pos = new Float32Array(n * 3);
   const col = new Float32Array(n * 3);
@@ -26,7 +26,7 @@ export function createStarfield(mobile: boolean): Points {
     pos[i * 3] = r * Math.sin(phi) * Math.cos(theta);
     pos[i * 3 + 1] = r * Math.cos(phi);
     pos[i * 3 + 2] = r * Math.sin(phi) * Math.sin(theta);
-    const c = 0.72 + rng() * 0.28;
+    const c = (0.72 + rng() * 0.28) * 0.6;
     const warm = rng();
     col[i * 3] = c;
     col[i * 3 + 1] = c * (0.94 + 0.06 * warm);

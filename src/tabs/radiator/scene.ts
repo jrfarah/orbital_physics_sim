@@ -1,13 +1,17 @@
 import {
+  AdditiveBlending,
   ArrowHelper,
   BoxGeometry,
   BufferAttribute,
   BufferGeometry,
   CanvasTexture,
+  DirectionalLight,
+  EdgesGeometry,
   Group,
   Line,
   LineBasicMaterial,
   LineLoop,
+  LineSegments,
   Mesh,
   MeshStandardMaterial,
   Raycaster,
@@ -24,14 +28,11 @@ import type { FaceFlux, RadiatorResult } from '../../physics/radiator';
 import type { Vec3 } from '../../physics/vec';
 import { createEarth } from '../../engine/earth';
 import { createHeatMaterial, setHeat, type HeatMaterial } from '../../engine/heatMaterial';
-import { clearUserOrbit, createControls, makeCamera, reducedMotion, requestRender, type TabView } from '../../engine/renderer';
+import { clearUserOrbit, createControls, makeCamera, reducedMotion, requestRender, userHasOrbited, type TabView } from '../../engine/renderer';
 import { createStarfield, createSunSprite } from '../../engine/starfield';
 
-const T_COLD = 150;
-const T_HOT = 400;
-
 function heat01(t: number): number {
-  return Math.min(1, Math.max(0, (t - T_COLD) / (T_HOT - T_COLD)));
+  return Math.min(1, Math.max(0, (t - 1) / 399));
 }
 
 function v3(v: Vec3): Vector3 {
@@ -79,13 +80,25 @@ export function createRadiatorScene(mobile: boolean, tag: HTMLElement) {
   const matA = createHeatMaterial(0);
   const matB = createHeatMaterial(0);
   const edge = new MeshStandardMaterial({ color: 0x2a2e34, metalness: 0.85, roughness: 0.45 });
-  const panel = new Mesh(new BoxGeometry(0.09, 0.06, 0.004), [edge, edge, edge, edge, matA, matB]);
+  const panel = new Mesh(new BoxGeometry(0.14, 0.09, 0.006), [edge, edge, edge, edge, matA, matB]);
+  panel.layers.enable(1);
+  const outline = new LineSegments(
+    new EdgesGeometry(panel.geometry),
+    new LineBasicMaterial({ color: 0x5ce1ff, blending: AdditiveBlending, transparent: true, toneMapped: false }),
+  );
+  panel.add(outline);
   scene.add(panel);
+  const rim = new DirectionalLight(0xffffff, 0.6);
+  rim.layers.set(1);
+  scene.add(rim);
+  scene.add(rim.target);
   const labelA = makeSprite('A', '#5ce1ff');
   const labelB = makeSprite('B', '#ffb547');
+  labelA.visible = false;
+  labelB.visible = false;
   scene.add(labelA, labelB);
-  const arrowA = new ArrowHelper(new Vector3(0, 1, 0), new Vector3(), 0.12, 0x5ce1ff);
-  const arrowB = new ArrowHelper(new Vector3(0, -1, 0), new Vector3(), 0.12, 0xffb547);
+  const arrowA = new ArrowHelper(new Vector3(0, 1, 0), new Vector3(), 0.18, 0x5ce1ff);
+  const arrowB = new ArrowHelper(new Vector3(0, -1, 0), new Vector3(), 0.18, 0xffb547);
   scene.add(arrowA, arrowB);
 
   const orbitGeo = new BufferGeometry();
@@ -108,8 +121,27 @@ export function createRadiatorScene(mobile: boolean, tag: HTMLElement) {
   controls.target.set(0, 0, 0);
   controls.update();
 
-  const homePos = new Vector3(2.4, 1.2, 2.4);
-  const homeTarget = new Vector3();
+  let preset: 'overview' | 'sat' = 'sat';
+  const earthSphere = new Sphere(new Vector3(), 1);
+  const overlay = document.createElement('div');
+  overlay.className = 'stage-overlay';
+  const reticle = document.createElement('div');
+  reticle.className = 'reticle';
+  reticle.innerHTML = '<i></i><i></i><i></i><i></i><span>Radiator</span>';
+  const faceTagA = document.createElement('div');
+  faceTagA.className = 'face-tag a';
+  faceTagA.textContent = 'A';
+  const faceTagB = document.createElement('div');
+  faceTagB.className = 'face-tag b';
+  faceTagB.textContent = 'B';
+  const leaders = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  leaders.setAttribute('class', 'leaders');
+  const leadA = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+  const leadB = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+  leaders.append(leadA, leadB);
+  overlay.append(leaders, reticle, faceTagA, faceTagB);
+  const scratch = new Vector3();
+  const corner = new Vector3();
   let focus: { from: Vector3; to: Vector3; fromT: Vector3; toT: Vector3; t0: number } | null = null;
   const raycaster = new Raycaster();
   const ndc = new Vector2();
@@ -145,6 +177,96 @@ export function createRadiatorScene(mobile: boolean, tag: HTMLElement) {
     onDrag((phi * 180) / Math.PI, (theta * 180) / Math.PI);
   }
 
+  function cameraPose(): { pos: Vector3; target: Vector3 } {
+    const target = panel.position.clone();
+    if (preset === 'overview') {
+      return { pos: target.clone().add(new Vector3(2.4, 1.2, 2.4)), target };
+    }
+    const radial = panel.position.clone();
+    if (radial.lengthSq() < 1e-8) radial.set(1, 0, 0);
+    radial.normalize();
+    const normal = new Vector3().setFromMatrixColumn(panel.matrix, 2);
+    if (normal.lengthSq() < 1e-8) normal.copy(radial);
+    normal.normalize();
+    const side = new Vector3().crossVectors(normal, radial);
+    if (side.lengthSq() < 1e-8) side.crossVectors(new Vector3(0, 1, 0), radial);
+    side.normalize();
+    const pos = panel.position.clone().addScaledVector(radial, 0.22).addScaledVector(side, 0.18);
+    return { pos, target };
+  }
+
+  function frameCamera(animate: boolean): void {
+    const next = cameraPose();
+    camera.up.set(0, 1, 0);
+    if (!animate || reducedMotion()) {
+      focus = null;
+      camera.position.copy(next.pos);
+      controls.target.copy(next.target);
+      controls.update();
+      requestRender();
+      return;
+    }
+    focus = {
+      from: camera.position.clone(),
+      to: next.pos,
+      fromT: controls.target.clone(),
+      toT: next.target,
+      t0: performance.now(),
+    };
+    requestRender();
+  }
+
+  function screenOf(world: Vector3, w: number, h: number): { x: number; y: number; behind: boolean } {
+    corner.copy(world).project(camera);
+    return {
+      x: (corner.x * 0.5 + 0.5) * w,
+      y: (-corner.y * 0.5 + 0.5) * h,
+      behind: corner.z > 1,
+    };
+  }
+
+  function placeReticle(w: number, h: number): void {
+    panel.updateMatrixWorld(true);
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    const locals = [
+      [-0.07, -0.045, 0.004],
+      [0.07, -0.045, 0.004],
+      [0.07, 0.045, 0.004],
+      [-0.07, 0.045, 0.004],
+    ];
+    for (const [x, y, z] of locals) {
+      scratch.set(x, y, z).applyMatrix4(panel.matrixWorld);
+      const p = screenOf(scratch, w, h);
+      minX = Math.min(minX, p.x);
+      minY = Math.min(minY, p.y);
+      maxX = Math.max(maxX, p.x);
+      maxY = Math.max(maxY, p.y);
+    }
+    const bw = Math.max(36, maxX - minX);
+    const bh = Math.max(36, maxY - minY);
+    const cx = (minX + maxX) / 2;
+    const cy = (minY + maxY) / 2;
+    reticle.style.left = `${cx - bw / 2}px`;
+    reticle.style.top = `${cy - bh / 2}px`;
+    reticle.style.width = `${bw}px`;
+    reticle.style.height = `${bh}px`;
+  }
+
+  function placeFaceTag(tag: HTMLElement, line: SVGLineElement, world: Vector3, face: Vector3, w: number, h: number): void {
+    const label = screenOf(world, w, h);
+    const origin = screenOf(face, w, h);
+    tag.hidden = label.behind;
+    tag.style.left = `${label.x}px`;
+    tag.style.top = `${label.y}px`;
+    line.setAttribute('x1', String(origin.x));
+    line.setAttribute('y1', String(origin.y));
+    line.setAttribute('x2', String(label.x));
+    line.setAttribute('y2', String(label.y));
+  }
+
   function view(): TabView {
     return {
       scene,
@@ -161,22 +283,32 @@ export function createRadiatorScene(mobile: boolean, tag: HTMLElement) {
         return focus !== null || t < 1;
       },
       resetView() {
-        focus = null;
         clearUserOrbit(controls);
-        camera.position.copy(homePos);
-        controls.target.copy(homeTarget);
-        controls.update();
-        requestRender();
+        frameCamera(false);
       },
       onResize() {
-        focus = null;
-        camera.position.copy(homePos);
-        controls.target.copy(homeTarget);
-        controls.update();
+        frameCamera(false);
       },
       syncDom() {
+        rim.position.copy(camera.position);
+        rim.target.position.copy(panel.position);
+        const host = canvas().parentElement;
+        if (!host) return;
+        const w = host.clientWidth;
+        const h = host.clientHeight;
         projected.copy(panel.position).project(camera);
         tag.hidden = projected.z > 1;
+        const toPanel = scratch.copy(panel.position).sub(camera.position);
+        const dist = toPanel.length();
+        const dir = toPanel.multiplyScalar(1 / Math.max(dist, 1e-6));
+        raycaster.set(camera.position, dir);
+        const blocked = raycaster.ray.intersectSphere(earthSphere, corner);
+        const hidden = projected.z > 1 || (blocked !== null && corner.distanceTo(camera.position) + 0.02 < dist);
+        reticle.hidden = hidden;
+        if (!hidden) placeReticle(w, h);
+        placeFaceTag(faceTagA, leadA, labelA.position, panel.position.clone().addScaledVector(new Vector3().setFromMatrixColumn(panel.matrix, 2), 0.004), w, h);
+        const nB = new Vector3().setFromMatrixColumn(panel.matrix, 2).multiplyScalar(-1);
+        placeFaceTag(faceTagB, leadB, labelB.position, panel.position.clone().addScaledVector(nB, 0.004), w, h);
       },
     };
   }
@@ -209,6 +341,12 @@ export function createRadiatorScene(mobile: boolean, tag: HTMLElement) {
         node.addEventListener('pointerup', onPointerUp);
       }
     },
+    setPreset(next: 'overview' | 'sat') {
+      preset = next;
+      clearUserOrbit(controls);
+      frameCamera(true);
+    },
+    overlay,
     focusPanel() {
       const from = camera.position.clone();
       const fromT = controls.target.clone();
@@ -246,8 +384,9 @@ export function createRadiatorScene(mobile: boolean, tag: HTMLElement) {
       panel.matrixWorldNeedsUpdate = true;
       setHeat(matA, heat01(result.A.T_sink));
       setHeat(matB, heat01(result.B.T_sink));
-      labelA.position.copy(pos).addScaledVector(n, 0.07);
-      labelB.position.copy(pos).addScaledVector(n, -0.07);
+      labelA.position.copy(pos).addScaledVector(n, 0.05);
+      labelB.position.copy(pos).addScaledVector(n, -0.05);
+      if (!focus && !userHasOrbited(controls)) frameCamera(false);
       arrowA.position.copy(pos);
       arrowA.setDirection(n);
       arrowB.position.copy(pos);

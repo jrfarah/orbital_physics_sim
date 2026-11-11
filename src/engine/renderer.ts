@@ -74,6 +74,10 @@ export function clearUserOrbit(controls: OrbitControls): void {
   userMoved.set(controls, false);
 }
 
+export function userHasOrbited(controls: OrbitControls): boolean {
+  return userMoved.get(controls) === true;
+}
+
 function dropQuality(): void {
   let next = 1;
   for (const s of steps) {

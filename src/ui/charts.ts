@@ -71,14 +71,17 @@ export function createChart(host: HTMLElement, aspect = 1.7): { draw: (spec: Cha
     ctx.clearRect(0, 0, width, height);
     labels.replaceChildren();
     placed.length = 0;
-    const left = 54;
+    const [y0, y1] = spec.yDomain;
+    ctx.font = '11px JetBrains Mono, ui-monospace, monospace';
+    const yTicks = niceTicks(y0, y1, spec.yLog);
+    let left = 28;
+    for (const value of yTicks) left = Math.max(left, ctx.measureText(formatTick(value)).width + 8);
     const right = 12;
     const top = spec.yLabel ? 22 : 8;
     const bottom = spec.bandLabels ? 46 : 28;
     const plotW = width - left - right;
     const plotH = height - top - bottom;
     const [x0, x1] = spec.xDomain;
-    const [y0, y1] = spec.yDomain;
     const xOf = (x: number) => {
       const t = spec!.xLog ? (Math.log10(x) - Math.log10(x0)) / (Math.log10(x1) - Math.log10(x0)) : (x - x0) / (x1 - x0);
       return left + Math.min(1, Math.max(0, t)) * plotW;
@@ -91,15 +94,13 @@ export function createChart(host: HTMLElement, aspect = 1.7): { draw: (spec: Cha
     };
     ctx.strokeStyle = 'rgba(120,180,255,0.08)';
     ctx.lineWidth = 1;
-    ctx.font = '11px JetBrains Mono, ui-monospace, monospace';
     ctx.fillStyle = token('--text-dim');
-    for (let i = 0; i <= 4; i++) {
-      const y = top + (plotH * i) / 4;
+    for (const value of yTicks) {
+      const y = yOf(value);
       ctx.beginPath();
       ctx.moveTo(left, y);
       ctx.lineTo(left + plotW, y);
       ctx.stroke();
-      const value = spec.yLog ? y0 * (y1 / y0) ** (1 - i / 4) : y1 - ((y1 - y0) * i) / 4;
       place(formatTick(value), 2, y - 6, token('--text-dim'));
     }
     if (spec.shade) {
@@ -193,10 +194,45 @@ export function createChart(host: HTMLElement, aspect = 1.7): { draw: (spec: Cha
   };
 }
 
+function niceTicks(min: number, max: number, log = false): number[] {
+  if (!(max > min)) return [min];
+  if (log && min > 0 && max > 0) {
+    const out: number[] = [];
+    for (let exp = Math.ceil(Math.log10(min)); exp <= Math.floor(Math.log10(max)) && out.length < 5; exp++) out.push(10 ** exp);
+    return out.length ? out : [min, max];
+  }
+  const rough = (max - min) / 4;
+  const exp = Math.floor(Math.log10(Math.max(rough, 1e-12)));
+  const base = rough / 10 ** exp;
+  const nice = base <= 1 ? 1 : base <= 2 ? 2 : base <= 5 ? 5 : 10;
+  const step = nice * 10 ** exp;
+  const start = Math.ceil((min - step * 1e-9) / step) * step;
+  const out: number[] = [];
+  for (let value = start; value <= max + step * 1e-6 && out.length < 5; value += step) out.push(value);
+  return out.length ? out : [min, max];
+}
+
 function formatTick(value: number): string {
   const ax = Math.abs(value);
-  if (ax !== 0 && (ax < 0.01 || ax >= 10000)) return value.toExponential(0);
+  if (ax === 0) return '0';
+  if (ax < 1e-3 || ax >= 1e6) {
+    const exp = Math.floor(Math.log10(ax));
+    const mantissa = value / 10 ** exp;
+    const digits = Math.abs(mantissa) >= 10 ? 0 : 1;
+    const shown = Number(mantissa.toFixed(digits));
+    return `${shown}×10${superscript(exp)}`;
+  }
   if (ax >= 100) return Math.round(value).toLocaleString('en-US');
   if (ax >= 10) return value.toFixed(0);
-  return String(Math.round(value * 100) / 100);
+  const text = value.toPrecision(3);
+  return String(Number(text));
+}
+
+function superscript(exp: number): string {
+  const digits = '⁰¹²³⁴⁵⁶⁷⁸⁹';
+  const body = String(Math.abs(exp))
+    .split('')
+    .map((d) => digits[Number(d)])
+    .join('');
+  return exp < 0 ? `⁻${body}` : body;
 }

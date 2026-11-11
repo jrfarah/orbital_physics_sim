@@ -26,24 +26,39 @@ export function paintFace(canvas: HTMLCanvasElement, heat01: number): void {
   ctx.putImageData(image, 0, 0);
 }
 
-export function createHeatLegend(): HTMLElement {
-  const wrap = el('div');
+export function createHeatLegend(): { element: HTMLElement; setMarkers: (a: number, b: number) => void } {
+  const wrap = el('div', 'heat-scale');
   const canvas = document.createElement('canvas');
   canvas.width = 320;
-  canvas.height = 14;
+  canvas.height = 10;
   canvas.className = 'legend';
   const ctx = canvas.getContext('2d');
   if (ctx) {
     for (let x = 0; x < 320; x++) {
-      const temp = 3 + (x / 319) * (400 - 3);
-      const heat = Math.min(1, Math.max(0, (temp - 150) / (400 - 150)));
+      const temp = 1 + (x / 319) * 399;
+      const heat = Math.min(1, Math.max(0, (temp - 1) / 399));
       const rgb = legendColor(heat);
       ctx.fillStyle = `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
-      ctx.fillRect(x, 0, 1, 14);
+      ctx.fillRect(x, 0, 1, 10);
     }
   }
-  const labels = el('div', 'field-head faint');
-  labels.append(el('span', '', '3 K'), el('span', '', '150 K'), el('span', '', '250 K'), el('span', '', '400 K'));
-  wrap.append(canvas, labels, el('div', 'faint', 'Effective temperature this face sees'));
-  return wrap;
+  const pinA = el('i', 'pin a', 'A');
+  const pinB = el('i', 'pin b', 'B');
+  const bar = el('div', 'heat-bar');
+  bar.append(canvas, pinA, pinB);
+  const ticks = el('div', 'heat-ticks');
+  for (const temp of [100, 200, 300]) {
+    const tick = el('span', '', String(temp));
+    tick.style.left = `${((temp - 1) / 399) * 100}%`;
+    ticks.append(tick);
+  }
+  wrap.append(bar, ticks, el('div', 'caption', '1 K → 400 K'));
+  const at = (temp: number) => `${Math.min(100, Math.max(0, ((temp - 1) / 399) * 100))}%`;
+  return {
+    element: wrap,
+    setMarkers(a, b) {
+      pinA.style.left = at(a);
+      pinB.style.left = at(b);
+    },
+  };
 }

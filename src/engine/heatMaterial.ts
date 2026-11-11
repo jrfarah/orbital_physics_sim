@@ -45,12 +45,9 @@ export function emberLinear(k: number): [number, number, number] {
 export function coverageK(heat01: number, n: number, uvx: number, uvy: number): number {
   const edge = 1 - smoothstep(0, 0.5, Math.min(Math.min(uvx, 1 - uvx), Math.min(uvy, 1 - uvy)));
   const field = 0.65 * n + 0.35 * (1 - edge);
-  // QUESTION: the spec writes `threshold = heat01 * 1.15`, but that window
-  // moves past 1.0 above heat01 ≈ 0.87 and the hottest faces go dark.
-  // (1 - heat01) * 1.15 uses the same window and the same edge/valley field,
-  // and the ember creeps outward as temperature rises.
-  const threshold = (1 - heat01) * 1.15;
-  return smoothstep(threshold - 0.12, threshold + 0.02, 1 - field) * heat01;
+  if (heat01 < 0.02) return 0;
+  const threshold = 1 - heat01;
+  return smoothstep(threshold - 0.05, threshold + 0.05, 1 - field);
 }
 
 function smoothstep(e0: number, e1: number, x: number): number {
@@ -143,7 +140,7 @@ export function createHeatMaterial(heat01 = 0, tiles = false): HeatMaterial {
     map: whiteMap(),
   }) as HeatMaterial;
   mat.userData.heat = heat;
-  mat.customProgramCacheKey = () => (tiles ? 'heat-tiles-v1' : 'heat-face-v1');
+  mat.customProgramCacheKey = () => (tiles ? 'heat-tiles-v2' : 'heat-face-v2');
   mat.onBeforeCompile = (shader: WebGLProgramParametersWithUniforms) => {
     shader.uniforms.uHeat = heat;
     shader.uniforms.uNoise = { value: getNoiseTexture() };
@@ -172,8 +169,8 @@ vec2 heatUv = vMapUv;
 float n = texture2D(uNoise, heatUv).r;
 float edge = 1.0 - smoothstep(0.0, 0.5, min(min(heatUv.x, 1.0-heatUv.x), min(heatUv.y, 1.0-heatUv.y)));
 float field = 0.65 * n + 0.35 * (1.0 - edge);
-float threshold = (1.0 - uHeat) * 1.15;
-float k = smoothstep(threshold - 0.12, threshold + 0.02, 1.0 - field) * uHeat;
+float threshold = 1.0 - uHeat;
+float k = uHeat < 0.02 ? 0.0 : smoothstep(threshold - 0.05, threshold + 0.05, 1.0 - field);
 vec3 ember = emberRamp(k);
 vec3 warm = srgbToLin(vec3(122.0, 23.0, 10.0)/255.0);
 diffuseColor.rgb = mix(diffuseColor.rgb, warm, 0.06 * uHeat);

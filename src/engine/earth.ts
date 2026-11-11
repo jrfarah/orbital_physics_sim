@@ -1,16 +1,19 @@
 import {
-  AmbientLight,
+  AdditiveBlending,
   BackSide,
-  Color,
+  DataTexture,
   DirectionalLight,
   Group,
+  LinearFilter,
   Mesh,
-  MeshStandardMaterial,
+  RGBAFormat,
   ShaderMaterial,
   SphereGeometry,
   SRGBColorSpace,
+  Texture,
   TextureLoader,
-  type WebGLProgramParametersWithUniforms,
+  UnsignedByteType,
+  AmbientLight,
 } from 'three';
 import { requestRender } from './renderer';
 
@@ -21,40 +24,80 @@ export interface EarthBundle {
   dispose: () => void;
 }
 
+const earthShader = {
+  vertex: /* glsl */ `
+    varying vec3 vWorld;
+    varying vec3 vNormalW;
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      vec4 world = modelMatrix * vec4(position, 1.0);
+      vWorld = world.xyz;
+      vNormalW = normalize(mat3(modelMatrix) * normal);
+      gl_Position = projectionMatrix * viewMatrix * world;
+    }
+  `,
+  fragment: /* glsl */ `
+    uniform sampler2D uDay;
+    uniform sampler2D uNight;
+    uniform float uGraticule;
+    uniform float uHasNight;
+    varying vec3 vWorld;
+    varying vec3 vNormalW;
+    varying vec2 vUv;
+    void main() {
+      vec3 n = normalize(vNormalW);
+      vec3 sunDir = vec3(1.0, 0.0, 0.0);
+      float ndotl = dot(n, sunDir);
+      float day = smoothstep(-0.08, 0.18, ndotl);
+      vec3 dayCol = texture2D(uDay, vUv).rgb;
+      vec3 nightCol = texture2D(uNight, vUv).rgb;
+      vec3 color = dayCol * (0.04 + 0.96 * day * pow(max(ndotl, 0.0), 0.6));
+      color += nightCol * vec3(1.0, 0.82, 0.55) * 1.4 * (1.0 - day) * uHasNight;
+      float water = smoothstep(0.05, 0.15, dayCol.b - max(dayCol.r, dayCol.g));
+      vec3 viewDir = normalize(cameraPosition - vWorld);
+      vec3 halfVec = normalize(sunDir + viewDir);
+      float spec = pow(max(dot(n, halfVec), 0.0), 60.0) * 0.35 * water * step(0.0, ndotl);
+      color += vec3(spec);
+      vec3 p = normalize(vWorld);
+      float lat = asin(clamp(p.y, -1.0, 1.0));
+      float lon = atan(p.z, p.x);
+      float latF = abs(fract((lat + 1.5707963) / (3.14159265 / 12.0)) - 0.5);
+      float lonF = abs(fract((lon + 3.14159265) / (6.2831853 / 24.0)) - 0.5);
+      float line = 1.0 - smoothstep(0.0, 0.02, min(latF, lonF));
+      color = mix(color, vec3(0.29, 0.75, 1.0), line * uGraticule);
+      gl_FragColor = vec4(color, 1.0);
+    }
+  `,
+};
+
+function blankTexture(rgb: [number, number, number]): DataTexture {
+  const data = new Uint8Array([rgb[0], rgb[1], rgb[2], 255]);
+  const tex = new DataTexture(data, 1, 1, RGBAFormat, UnsignedByteType);
+  tex.magFilter = LinearFilter;
+  tex.minFilter = LinearFilter;
+  tex.colorSpace = SRGBColorSpace;
+  tex.needsUpdate = true;
+  return tex;
+}
+
 export function createEarth(mobile: boolean): EarthBundle {
   const group = new Group();
   const geo = new SphereGeometry(1, mobile ? 64 : 96, mobile ? 48 : 64);
-  const graticule = { value: 1 };
-  const mat = new MeshStandardMaterial({
-    color: new Color('#0c1422'),
-    roughness: 0.9,
-    metalness: 0,
+  const graticule = { value: 0.15 };
+  const hasNight = { value: 0 };
+  const dayTex = blankTexture([8, 14, 24]);
+  const nightTex = blankTexture([0, 0, 0]);
+  const mat = new ShaderMaterial({
+    uniforms: {
+      uDay: { value: dayTex },
+      uNight: { value: nightTex },
+      uGraticule: graticule,
+      uHasNight: hasNight,
+    },
+    vertexShader: earthShader.vertex,
+    fragmentShader: earthShader.fragment,
   });
-  mat.customProgramCacheKey = () => 'earth-graticule-v1';
-  mat.onBeforeCompile = (shader: WebGLProgramParametersWithUniforms) => {
-    shader.uniforms.uGraticule = graticule;
-    shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vLocalPos;')
-      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvLocalPos = position;');
-    shader.fragmentShader = shader.fragmentShader
-      .replace(
-        '#include <common>',
-        '#include <common>\nuniform float uGraticule;\nvarying vec3 vLocalPos;',
-      )
-      .replace(
-        '#include <opaque_fragment>',
-        `if (uGraticule > 0.5) {
-  vec3 p = normalize(vLocalPos);
-  float lat = asin(clamp(p.y, -1.0, 1.0));
-  float lon = atan(p.z, p.x);
-  float latF = abs(fract((lat + 1.5707963) / (3.14159265 / 12.0)) - 0.5);
-  float lonF = abs(fract((lon + 3.14159265) / (6.2831853 / 24.0)) - 0.5);
-  float line = 1.0 - smoothstep(0.0, 0.045, min(latF, lonF));
-  outgoingLight = mix(outgoingLight, vec3(0.25, 0.78, 1.0), line * 0.8);
-}
-#include <opaque_fragment>`,
-      );
-  };
   const mesh = new Mesh(geo, mat);
   group.add(mesh);
 
@@ -63,15 +106,15 @@ export function createEarth(mobile: boolean): EarthBundle {
     transparent: true,
     depthWrite: false,
     side: BackSide,
-    blending: 2,
-    uniforms: { uSun: { value: { x: 1, y: 0, z: 0 } } },
+    blending: AdditiveBlending,
+    uniforms: {},
     vertexShader: /* glsl */ `
       varying vec3 vN;
       varying vec3 vW;
       void main() {
-        vN = normalize(normalMatrix * normal);
         vec4 w = modelMatrix * vec4(position, 1.0);
         vW = w.xyz;
+        vN = normalize(mat3(modelMatrix) * normal);
         gl_Position = projectionMatrix * viewMatrix * w;
       }
     `,
@@ -81,35 +124,58 @@ export function createEarth(mobile: boolean): EarthBundle {
       void main() {
         vec3 n = normalize(vN);
         vec3 viewDir = normalize(cameraPosition - vW);
-        float fres = pow(1.0 - abs(dot(n, viewDir)), 2.4);
-        float sun = pow(max(dot(n, vec3(1.0, 0.0, 0.0)), 0.0), 0.55);
-        float a = fres * (0.25 + 0.75 * sun);
-        gl_FragColor = vec4(0.290, 0.659, 1.0, a);
+        float ndotl = dot(n, vec3(1.0, 0.0, 0.0));
+        float day = smoothstep(-0.08, 0.18, ndotl);
+        float fres = pow(1.0 - abs(dot(n, viewDir)), 2.6);
+        float term = exp(-pow(ndotl / 0.07, 2.0));
+        vec3 cool = vec3(0.290, 0.659, 1.0);
+        vec3 warm = vec3(1.0, 0.62, 0.32);
+        vec3 col = mix(cool, warm, clamp(term, 0.0, 1.0));
+        float a = fres * mix(0.18, 1.0, day);
+        gl_FragColor = vec4(col, a);
       }
     `,
   });
-  const atmo = new Mesh(atmoGeo, atmoMat);
-  group.add(atmo);
+  group.add(new Mesh(atmoGeo, atmoMat));
 
-  const sun = new DirectionalLight(0xffffff, 2.2);
+  const sun = new DirectionalLight(0xffffff, 1.15);
   sun.position.set(10, 0, 0);
-  const ambient = new AmbientLight(0xffffff, 0.06);
+  const ambient = new AmbientLight(0xffffff, 0.02);
+  const loaded: Texture[] = [];
 
-  const url = `${import.meta.env.BASE_URL}textures/${mobile ? 'earth_day_1k.jpg' : 'earth_day_2k.jpg'}`;
-  new TextureLoader().load(
-    url,
+  const fadeOut = () => {
+    const t0 = performance.now();
+    const step = () => {
+      const t = Math.min(1, (performance.now() - t0) / 400);
+      graticule.value = 0.15 * (1 - t);
+      requestRender();
+      if (t < 1) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  };
+
+  const loader = new TextureLoader();
+  const base = import.meta.env.BASE_URL;
+  loader.load(`${base}textures/${mobile ? 'earth_day_1k.jpg' : 'earth_day_2k.jpg'}`, (tex) => {
+    tex.colorSpace = SRGBColorSpace;
+    tex.anisotropy = 4;
+    mat.uniforms.uDay.value = tex;
+    loaded.push(tex);
+    fadeOut();
+  });
+  loader.load(
+    `${base}textures/${mobile ? 'earth_night_1k.jpg' : 'earth_night_2k.jpg'}`,
     (tex) => {
       tex.colorSpace = SRGBColorSpace;
       tex.anisotropy = 4;
-      mat.map = tex;
-      mat.color.set('#ffffff');
-      graticule.value = 0;
-      mat.needsUpdate = true;
+      mat.uniforms.uNight.value = tex;
+      hasNight.value = 1;
+      loaded.push(tex);
       requestRender();
     },
     undefined,
     () => {
-      graticule.value = 1;
+      hasNight.value = 0;
     },
   );
 
@@ -120,9 +186,11 @@ export function createEarth(mobile: boolean): EarthBundle {
     dispose() {
       geo.dispose();
       atmoGeo.dispose();
-      mat.map?.dispose();
       mat.dispose();
       atmoMat.dispose();
+      dayTex.dispose();
+      nightTex.dispose();
+      for (const tex of loaded) tex.dispose();
     },
   };
 }

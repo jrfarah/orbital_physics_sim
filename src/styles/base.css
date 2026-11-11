@@ -207,7 +207,8 @@ html, body, #app { height: 100%; }
   #hud > *:not(.grid-2) > .faces,
   #hud > *:not(.grid-2) > .chart-host,
   #hud > *:not(.grid-2) > .collapsible,
-  #hud > *:not(.grid-2) > .legend-row { grid-column: 1 / -1; }
+  #hud > *:not(.grid-2) > .legend-row,
+  #hud > *:not(.grid-2) > .heat-scale { grid-column: 1 / -1; }
   #panel {
     position: sticky;
     top: 0;
@@ -227,6 +228,8 @@ html, body, #app { height: 100%; }
     overflow: hidden;
   }
   #stage { order: -1; height: 52dvh; flex: none; }
+  .stage-presets { width: min(150px, 46%); }
+  .scale-tag, .disc-tag { max-width: 42%; }
   #hud {
     flex: 1;
     overflow: auto;
