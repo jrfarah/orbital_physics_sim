@@ -57,6 +57,16 @@ try {
           offenders.push(...(await audit(page)).map((item) => `${tab} 1440x900 scenario "${label.trim()}": ${item}`));
         }
       }
+      if (tab === 'thermal') {
+        const powers = [120e3, 1e6, 10e6, 100e6, 1e9, 10e9, 100e9, 1e12];
+        for (const power of powers) {
+          await page.goto(`http://127.0.0.1:${port}/#/thermal?P=${power}`, { waitUntil: 'domcontentloaded' });
+          await page.waitForSelector('.scale-inset');
+          await page.waitForTimeout(500);
+          const inset = await insetAudit(page);
+          offenders.push(...inset.map((item) => `thermal ${width}x${height} ${power} W: ${item}`));
+        }
+      }
     }
   }
 } finally {
@@ -70,6 +80,30 @@ if (offenders.length) {
   process.exit(1);
 }
 console.log('Layout check passed.');
+
+async function insetAudit(page) {
+  return page.evaluate(() => {
+    const card = document.querySelector('.scale-inset');
+    if (!card) return ['missing scale inset'];
+    const cardRect = card.getBoundingClientRect();
+    const problems = [];
+    for (const el of card.querySelectorAll('circle, path')) {
+      const rect = el.getBoundingClientRect();
+      if (rect.width < 0.5 && rect.height < 0.5) continue;
+      const outside =
+        rect.left < cardRect.left - 1 ||
+        rect.top < cardRect.top - 1 ||
+        rect.right > cardRect.right + 1 ||
+        rect.bottom > cardRect.bottom + 1;
+      if (outside) {
+        problems.push(
+          `inset drawing outside the card (${Math.round(rect.left)},${Math.round(rect.top)} ${Math.round(rect.width)}x${Math.round(rect.height)})`,
+        );
+      }
+    }
+    return problems;
+  });
+}
 
 async function audit(page) {
   return page.evaluate(() => {
