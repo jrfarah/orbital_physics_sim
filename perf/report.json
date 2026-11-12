@@ -63,13 +63,13 @@
     }
   },
   "after": {
-    "recordedAt": "2026-11-12T03:34:55.301Z",
+    "recordedAt": "2026-11-12T04:24:41.760Z",
     "desktop": {
       "viewport": "1440x900",
       "deviceScaleFactor": 2,
       "tabs": {
         "radiator": {
-          "frames": 422,
+          "frames": 416,
           "p50": 16.67,
           "p95": 16.67,
           "max": 183.33,
@@ -77,10 +77,10 @@
           "source": "chrome-tracing"
         },
         "thermal": {
-          "frames": 316,
+          "frames": 320,
           "p50": 16.67,
           "p95": 16.67,
-          "max": 149.99,
+          "max": 166.66,
           "maxAfter1s": 16.67,
           "source": "chrome-tracing"
         },
@@ -99,7 +99,7 @@
       "cpuSlowdown": 4,
       "tabs": {
         "radiator": {
-          "frames": 514,
+          "frames": 508,
           "p50": 16.67,
           "p95": 16.67,
           "max": 183.33,
@@ -107,15 +107,15 @@
           "source": "chrome-tracing"
         },
         "thermal": {
-          "frames": 340,
+          "frames": 336,
           "p50": 16.67,
           "p95": 16.67,
-          "max": 166.66,
+          "max": 133.33,
           "maxAfter1s": 16.67,
           "source": "chrome-tracing"
         },
         "kessler": {
-          "frames": 445,
+          "frames": 417,
           "p50": 16.67,
           "p95": 16.67,
           "max": 16.67,

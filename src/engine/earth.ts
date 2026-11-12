@@ -100,7 +100,14 @@ const surfaceFragment = /* glsl */ `
 
     float fres = pow(1.0 - max(dot(N, V), 0.0), 2.5);
     float haze = fres * 0.55 * smoothstep(-0.2, 0.4, NdotL);
-    vec3 color = mix(surface, vec3(0.42, 0.62, 1.0), haze) + lights;
+    vec3 nightC = pow(vec3(0.043, 0.086, 0.200), vec3(2.2));
+    vec3 twiC = pow(vec3(1.0, 0.604, 0.353), vec3(2.2));
+    vec3 dayC = pow(vec3(0.353, 0.663, 1.0), vec3(2.2));
+    vec3 shellCol = mix(mix(nightC, dayC, day), twiC, twilight);
+    float ndv = max(dot(N, V), 0.0);
+    float edge = smoothstep(0.22, 0.02, ndv);
+    vec3 limbCol = mix(vec3(0.42, 0.62, 1.0), shellCol, edge);
+    vec3 color = mix(surface, limbCol, haze) + lights;
     float alpha = 1.0;
     ${finish}
   }
@@ -133,58 +140,35 @@ const cloudFragment = /* glsl */ `
   }
 `;
 
-const limbFragment = /* glsl */ `
+const shellFragment = /* glsl */ `
   uniform vec3 uSunDir;
   varying vec3 vWorld;
-  varying vec3 vNormalW;
 
   vec3 srgb(vec3 c) {
     return pow(c, vec3(2.2));
   }
 
   void main() {
-    vec3 N = normalize(vNormalW);
-    vec3 L = normalize(uSunDir);
-    vec3 V = normalize(cameraPosition - vWorld);
-    float NdotL = dot(N, L);
+    vec3 c = cameraPosition;
+    vec3 d = normalize(vWorld - c);
+    vec3 sun = normalize(uSunDir);
+    float t = max(-dot(c, d), 0.0);
+    vec3 p = c + t * d;
+    float b = length(p);
+    float H = 0.012;
+    float dens = exp(-max(b - 1.0, 0.0) / H);
+    vec3 n = normalize(p);
+    float NdotL = dot(n, sun);
     float day = smoothstep(-0.10, 0.20, NdotL);
     float twilight = smoothstep(-0.18, 0.0, NdotL) * (1.0 - smoothstep(0.0, 0.28, NdotL));
     vec3 nightC = srgb(vec3(0.043, 0.086, 0.200));
     vec3 twiC = srgb(vec3(1.0, 0.604, 0.353));
     vec3 dayC = srgb(vec3(0.353, 0.663, 1.0));
-    vec3 tint = mix(mix(nightC, dayC, day), twiC, twilight);
-    float rim = pow(1.0 - abs(dot(N, V)), 3.0);
-    float inten = rim * (0.25 + 1.4 * day + 0.9 * twilight);
-    inten += pow(max(dot(V, -L), 0.0), 6.0) * 1.2 * rim;
-    vec3 color = tint * inten;
+    vec3 col = mix(mix(nightC, dayC, day), twiC, twilight);
+    float fwd = pow(max(dot(d, sun), 0.0), 8.0);
+    float intensity = dens * (0.15 + 1.3 * day + 0.8 * twilight) + dens * fwd * 1.2;
+    vec3 color = col * intensity;
     float alpha = 1.0;
-    ${finish}
-  }
-`;
-
-const hazeFragment = /* glsl */ `
-  uniform vec3 uSunDir;
-  varying vec3 vWorld;
-  varying vec3 vNormalW;
-
-  vec3 srgb(vec3 c) {
-    return pow(c, vec3(2.2));
-  }
-
-  void main() {
-    vec3 N = normalize(vNormalW);
-    vec3 L = normalize(uSunDir);
-    vec3 V = normalize(cameraPosition - vWorld);
-    float NdotL = dot(N, L);
-    float day = smoothstep(-0.10, 0.20, NdotL);
-    float twilight = smoothstep(-0.18, 0.0, NdotL) * (1.0 - smoothstep(0.0, 0.28, NdotL));
-    vec3 nightC = srgb(vec3(0.043, 0.086, 0.200));
-    vec3 twiC = srgb(vec3(1.0, 0.604, 0.353));
-    vec3 dayC = srgb(vec3(0.353, 0.663, 1.0));
-    vec3 color = mix(mix(nightC, dayC, day), twiC, twilight);
-    float rim = pow(1.0 - abs(dot(N, V)), 3.0);
-    float alpha = rim * 0.12;
-    if (alpha < 0.004) discard;
     ${finish}
   }
 `;
@@ -332,32 +316,20 @@ export function createEarth(mobile: boolean): EarthBundle {
   cloudMesh.renderOrder = 1;
   group.add(cloudMesh);
 
-  const haze = new ShaderMaterial({
+  const shell = new ShaderMaterial({
     uniforms: { uSunDir: sunDir },
     vertexShader: vertex,
-    fragmentShader: hazeFragment,
+    fragmentShader: shellFragment,
     transparent: true,
-    depthWrite: false,
-    side: FrontSide,
-  });
-  const hazeMesh = new Mesh(geo, haze);
-  hazeMesh.scale.setScalar(1.012);
-  hazeMesh.renderOrder = 2;
-  group.add(hazeMesh);
-
-  const limb = new ShaderMaterial({
-    uniforms: { uSunDir: sunDir },
-    vertexShader: vertex,
-    fragmentShader: limbFragment,
-    transparent: true,
+    depthTest: true,
     depthWrite: false,
     side: BackSide,
     blending: AdditiveBlending,
   });
-  const limbMesh = new Mesh(geo, limb);
-  limbMesh.scale.setScalar(1.028);
-  limbMesh.renderOrder = 3;
-  group.add(limbMesh);
+  const shellMesh = new Mesh(geo, shell);
+  shellMesh.scale.setScalar(1.07);
+  shellMesh.renderOrder = 2;
+  group.add(shellMesh);
 
   const owned = new Set<Texture>([dayLo, nightLo, cloudsLo, dayHi, nightHi, cloudsHi]);
   const thumbs = new Map<string, Texture>();
@@ -484,8 +456,7 @@ export function createEarth(mobile: boolean): EarthBundle {
       geo.dispose();
       surface.dispose();
       clouds.dispose();
-      haze.dispose();
-      limb.dispose();
+      shell.dispose();
       for (const tex of owned) tex.dispose();
     },
   };

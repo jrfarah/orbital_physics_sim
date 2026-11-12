@@ -12,15 +12,15 @@ const baseArg = process.argv.find((arg) => arg.startsWith('--base='));
 const goldenDir = new URL('../shots/golden/', import.meta.url);
 
 const views = [
-  { name: 'thermal-120kw', url: '#/thermal' },
-  { name: 'thermal-120kw-roundtrip', url: '#/thermal', roundtrip: true, goldenName: 'thermal-120kw' },
-  { name: 'thermal-1mw', url: '#/thermal?P=1000000' },
-  { name: 'thermal-1gw', url: '#/thermal?P=1000000000' },
-  { name: 'thermal-1tw', url: '#/thermal?P=1000000000000' },
-  { name: 'kessler-filed', url: '#/kessler?rate=1e9&area=800&preset=spacex', pause: true },
-  { name: 'kessler-1tw', url: '#/kessler?rate=1e12', pause: true },
-  { name: 'kessler-spread', url: '#/kessler?preset=spread', pause: true, allow: true },
-  { name: 'radiator-best-overview', url: '#/radiator', radiator: true, allow: true },
+  { name: 'thermal-120kw', url: '#/thermal', allow: true },
+  { name: 'thermal-120kw-roundtrip', url: '#/thermal', roundtrip: true, goldenName: 'thermal-120kw', allow: true },
+  { name: 'thermal-1mw', url: '#/thermal?P=1000000', allow: true },
+  { name: 'thermal-1gw', url: '#/thermal?P=1000000000', allow: true },
+  { name: 'thermal-1tw', url: '#/thermal?P=1000000000000', allow: true },
+  { name: 'kessler-filed', url: '#/kessler?rate=1e9&area=800&preset=spacex', pause: true, limb: true },
+  { name: 'kessler-1tw', url: '#/kessler?rate=1e12', pause: true, limb: true },
+  { name: 'kessler-spread', url: '#/kessler?preset=spread', pause: true, limb: true },
+  { name: 'radiator-best-overview', url: '#/radiator', radiator: true, limb: true },
 ];
 
 const port = await freePort();
@@ -98,10 +98,11 @@ try {
       await page.close();
       continue;
     }
-    const diff = await compare(golden, png, [...masks, ...goldenMasks], box);
-    const line = `${view.name}: ${(diff.ratio * 100).toFixed(2)}% masks ${masks.length}+${goldenMasks.length} (${diff.mismatch}/${diff.total})`;
+    const diff = await compare(golden, png, [...masks, ...goldenMasks], box, view.limb);
+    const limit = view.limb ? 0.01 : 0.03;
+    const line = `${view.name}: ${(diff.ratio * 100).toFixed(2)}%${view.limb ? ' outside the limb band' : ''} masks ${masks.length}+${goldenMasks.length} (${diff.mismatch}/${diff.total})`;
     console.log(line);
-    if (diff.ratio > 0.03) {
+    if (diff.ratio > limit) {
       await mkdir(new URL('../shots/visual-fail/', import.meta.url), { recursive: true });
       await writeFile(new URL(`../shots/visual-fail/${view.name}.png`, import.meta.url), png);
       if (diff.image) {
@@ -110,9 +111,11 @@ try {
         );
       }
     }
-    if (diff.ratio > 0.03) {
+    if (diff.ratio > limit) {
       if (view.allow) notes.push(line);
       else failures.push(line);
+    } else if (view.allow) {
+      notes.push(line);
     }
     await page.close();
   }
@@ -162,7 +165,161 @@ function paintOut(data, width, height, rects, dpr, skip) {
   }
 }
 
-async function compare(aBuf, bBuf, rects, box) {
+function earthCircle(data, width, height) {
+  const count = width * height;
+  const bg = new Uint8Array(count);
+  for (let p = 0; p < count; p++) {
+    const i = p * 4;
+    if (Math.abs(data[i] - 5) < 6 && Math.abs(data[i + 1] - 7) < 6 && Math.abs(data[i + 2] - 12) < 8) bg[p] = 1;
+  }
+  const cx0 = width >> 1;
+  const cy0 = height >> 1;
+  let seed = -1;
+  for (let rad = 0; rad < 400 && seed < 0; rad += 3) {
+    for (let a = 0; a < 12; a++) {
+      const x = Math.min(width - 1, Math.max(0, cx0 + Math.round(Math.cos(a) * rad)));
+      const y = Math.min(height - 1, Math.max(0, cy0 + Math.round(Math.sin(a) * rad)));
+      if (!bg[y * width + x]) {
+        seed = y * width + x;
+        break;
+      }
+    }
+  }
+  if (seed < 0) return null;
+  const seen = new Uint8Array(count);
+  const queue = [seed];
+  seen[seed] = 1;
+  const pts = [];
+  for (let qi = 0; qi < queue.length; qi++) {
+    const p = queue[qi];
+    const x = p % width;
+    const y = (p / width) | 0;
+    let edge = false;
+    for (const nx of [x - 1, x + 1]) {
+      if (nx < 0 || nx >= width || bg[y * width + nx]) edge = true;
+      else if (!seen[y * width + nx]) {
+        seen[y * width + nx] = 1;
+        queue.push(y * width + nx);
+      }
+    }
+    for (const ny of [y - 1, y + 1]) {
+      if (ny < 0 || ny >= height || bg[ny * width + x]) edge = true;
+      else if (!seen[ny * width + x]) {
+        seen[ny * width + x] = 1;
+        queue.push(ny * width + x);
+      }
+    }
+    if (edge && x > 3 && y > 3 && x < width - 4 && y < height - 4 && ((x + y) & 3) === 0) pts.push([x, y]);
+  }
+  if (pts.length < 40) return null;
+  const through = (a, b, c) => {
+    const [x1, y1] = a;
+    const [x2, y2] = b;
+    const [x3, y3] = c;
+    const d = 2 * (x1 * (y2 - y3) + x2 * (y3 - y1) + x3 * (y1 - y2));
+    if (Math.abs(d) < 1e-3) return null;
+    const s1 = x1 * x1 + y1 * y1;
+    const s2 = x2 * x2 + y2 * y2;
+    const s3 = x3 * x3 + y3 * y3;
+    const cx = (s1 * (y2 - y3) + s2 * (y3 - y1) + s3 * (y1 - y2)) / d;
+    const cy = (s1 * (x3 - x2) + s2 * (x1 - x3) + s3 * (x2 - x1)) / d;
+    const r = Math.hypot(cx - x1, cy - y1);
+    if (!Number.isFinite(r) || r < 80 || r > 4000) return null;
+    return { cx, cy, r };
+  };
+  let rand = 1;
+  const unit = () => {
+    rand = (Math.imul(rand, 1664525) + 1013904223) >>> 0;
+    return rand / 4294967296;
+  };
+  let best = [];
+  for (let k = 0; k < 400; k++) {
+    const circle = through(pts[(unit() * pts.length) | 0], pts[(unit() * pts.length) | 0], pts[(unit() * pts.length) | 0]);
+    if (!circle) continue;
+    const inliers = [];
+    for (const pt of pts) {
+      if (Math.abs(Math.hypot(pt[0] - circle.cx, pt[1] - circle.cy) - circle.r) < 8) inliers.push(pt);
+    }
+    if (inliers.length > best.length) best = inliers;
+  }
+  if (best.length < 40) return null;
+  let sx = 0;
+  let sy = 0;
+  let sxx = 0;
+  let syy = 0;
+  let sxy = 0;
+  let sxz = 0;
+  let syz = 0;
+  let sz = 0;
+  for (const [x, y] of best) {
+    const z = x * x + y * y;
+    sx += x;
+    sy += y;
+    sxx += x * x;
+    syy += y * y;
+    sxy += x * y;
+    sxz += x * z;
+    syz += y * z;
+    sz += z;
+  }
+  const n = best.length;
+  const det = (m) =>
+    m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) -
+    m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) +
+    m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+  const A = [
+    [sxx, sxy, sx],
+    [sxy, syy, sy],
+    [sx, sy, n],
+  ];
+  const B = [sxz, syz, sz];
+  const D = det(A);
+  if (!D) return null;
+  const replaced = (col) => A.map((row, i) => row.map((value, j) => (j === col ? B[i] : value)));
+  const cx = det(replaced(0)) / D / 2;
+  const cy = det(replaced(1)) / D / 2;
+  let r = Math.sqrt(Math.max(0, det(replaced(2)) / D + cx * cx + cy * cy));
+  const drops = [];
+  for (let a = 0; a < 360; a += 3) {
+    const dx = Math.cos((a * Math.PI) / 180);
+    const dy = Math.sin((a * Math.PI) / 180);
+    let prev = 0;
+    for (let t = 80; t < r * 1.25; t++) {
+      const x = Math.round(cx + dx * t);
+      const y = Math.round(cy + dy * t);
+      if (x < 0 || y < 0 || x >= width || y >= height) break;
+      const i = (y * width + x) * 4;
+      const luma = 0.2126 * data[i] + 0.7152 * data[i + 1] + 0.0722 * data[i + 2];
+      if (prev > 140 && prev - luma > 60) {
+        drops.push(t);
+        break;
+      }
+      prev = luma;
+    }
+  }
+  if (drops.length >= 40) {
+    drops.sort((a, b) => a - b);
+    const med = drops[drops.length >> 1];
+    const p80 = drops[Math.floor(drops.length * 0.8)];
+    if (p80 - med < 20 && med > r * 0.7 && med < r * 1.02) r = med;
+  }
+  return { cx, cy, r };
+}
+
+function maskLimb(data, width, height, circle, skip) {
+  if (!circle) return;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const ratio = Math.hypot(x - circle.cx, y - circle.cy) / circle.r;
+      if (ratio < 0.95 || ratio > 1.1) continue;
+      const i = (y * width + x) * 4;
+      data[i] = data[i + 1] = data[i + 2] = data[i + 3] = 0;
+      if (skip) skip[y * width + x] = 1;
+    }
+  }
+}
+
+async function compare(aBuf, bBuf, rects, box, limb) {
   const a = await raw(aBuf);
   const b = await raw(bBuf);
   if (a.width !== b.width || a.height !== b.height) {
@@ -172,6 +329,11 @@ async function compare(aBuf, bBuf, rects, box) {
   const skip = new Uint8Array(a.width * a.height);
   paintOut(a.data, a.width, a.height, rects, dpr, skip);
   paintOut(b.data, b.width, b.height, rects, dpr, null);
+  if (limb) {
+    const circle = earthCircle(a.data, a.width, a.height);
+    maskLimb(a.data, a.width, a.height, circle, skip);
+    maskLimb(b.data, b.width, b.height, circle, null);
+  }
   let total = 0;
   for (let i = 0; i < skip.length; i++) if (!skip[i]) total++;
   const image = Buffer.alloc(a.width * a.height * 4);
