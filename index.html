@@ -6,6 +6,45 @@
     <meta name="theme-color" content="#05070c" />
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%2305070c'/%3E%3C/svg%3E" />
     <title>Orbital Data Centers · The Physics</title>
+    <script>
+      window.goatcounter = { no_onload: true };
+      (function () {
+        var last = '';
+        function pagePath() {
+          return location.pathname + location.hash.split('?')[0];
+        }
+        function send() {
+          var next = pagePath();
+          if (next === last) return;
+          var started = Date.now();
+          function poll() {
+            try {
+              var gc = window.goatcounter;
+              if (gc && typeof gc.count === 'function') {
+                if (next === last) return;
+                last = next;
+                try { gc.count({ path: next }); } catch (err) {}
+                return;
+              }
+            } catch (err) {
+              return;
+            }
+            if (Date.now() - started >= 10000) return;
+            setTimeout(poll, 100);
+          }
+          poll();
+        }
+        try { send(); } catch (err) {}
+        window.addEventListener('hashchange', function () {
+          try { send(); } catch (err) {}
+        });
+        var script = document.createElement('script');
+        script.async = true;
+        script.setAttribute('data-goatcounter', 'https://orbitalphysics.goatcounter.com/count');
+        script.src = '%BASE_URL%vendor/goatcounter-count.js';
+        document.head.appendChild(script);
+      })();
+    </script>
   </head>
   <body>
     <div id="app">
