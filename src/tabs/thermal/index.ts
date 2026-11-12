@@ -7,7 +7,7 @@ import { bigNumber, card, el } from '../../ui/readout';
 import { createButtonRow, createCollapsible, createMoreDetail, createSlider, createToggle } from '../../ui/controls';
 import { span } from '../../engine/marks';
 import { holdMotion } from '../../engine/motion';
-import { reducedMotion, setActiveView } from '../../engine/renderer';
+import { isMobile, reducedMotion, setActiveView } from '../../engine/renderer';
 import { createThermalCharts } from './charts';
 import { BLOCK_M, SATELLITE_W } from './hex';
 import { arrayRadius, createThermalScene } from './scene';
@@ -86,7 +86,8 @@ export function createThermalTab(summary: (text: string) => void) {
   const state = defaults();
   const overlay = el('div', 'stage-overlay');
   const caption = el('div', 'stage-caption');
-  const scene = createThermalScene(overlay);
+  let scene: ReturnType<typeof createThermalScene> | null = isMobile() ? null : createThermalScene(overlay);
+  const live = (): ReturnType<typeof createThermalScene> => (scene ??= createThermalScene(overlay));
   const takeRow = el('div', 'take-row');
   const stack = el('div', 'stage-stack');
   stack.append(takeRow);
@@ -283,7 +284,7 @@ export function createThermalTab(summary: (text: string) => void) {
       power.setValue(target, true);
       follow = 'fit';
       wrapped();
-      scene.finishInset();
+      live().finishInset();
       return;
     }
     const decades = Math.abs(Math.log10(target / from));
@@ -301,7 +302,7 @@ export function createThermalTab(summary: (text: string) => void) {
       recompute(false);
       writeUrl();
       if (raw >= 1) {
-        scene.finishInset();
+        live().finishInset();
         powerAnim = 0;
         lockMotion(false);
       } else {
@@ -338,7 +339,7 @@ export function createThermalTab(summary: (text: string) => void) {
   footer.append(
     textButton('Assumptions & sources', () => openSources('Assumptions & sources', content.sources.thermal)),
     textButton('Equations', () => void openEquations('Equations', content.equations.thermal)),
-    textButton('Reset view', () => scene.view().resetView()),
+    textButton('Reset view', () => live().view().resetView()),
   );
   controls.append(power.element, snaps, chips, pumpBlock, advanced, footer);
 
@@ -387,7 +388,7 @@ export function createThermalTab(summary: (text: string) => void) {
     const result = span('physics recompute', () => thermalBudget(input));
     const bare = thermalBudget({ ...input, pump: false, T_hot: null });
     const unit = thermalBudget({ ...input, P: SATELLITE_W });
-    scene.layout(
+    live().layout(
       {
         aRad: result.A_rad,
         aTot: result.A_tot,
@@ -400,7 +401,7 @@ export function createThermalTab(summary: (text: string) => void) {
       mode,
     );
     const below = MILESTONES.filter((mark) => mark.watts < p * 0.999);
-    scene.setRings(
+    live().setRings(
       span('ring update', () => below.slice(-3).reverse().map((mark) => ({
         label: mark.label,
         radius: arrayRadius(
@@ -508,9 +509,12 @@ export function createThermalTab(summary: (text: string) => void) {
       if (take) takeRow.append(take, caption);
       else takeRow.append(caption);
       stage()?.addEventListener('pointerdown', onStageDown);
-      scene.rebind();
-      setActiveView(scene.view());
-      scene.prewarm();
+      live().rebind();
+      // The phone builds the scene on first show, after the stack was assembled.
+      const bar = overlay.querySelector('.scale-bar');
+      if (bar && bar.parentElement !== stack) stack.append(bar);
+      setActiveView(live().view());
+      live().prewarm();
       follow = 'fit';
       wrapped();
     },
@@ -521,10 +525,10 @@ export function createThermalTab(summary: (text: string) => void) {
       if (take) document.getElementById('stage')?.append(take);
       caption.remove();
       overlay.remove();
-      scene.detach();
+      live().detach();
     },
     reset() {
-      scene.view().resetView();
+      live().view().resetView();
     },
     readParams(params: URLSearchParams) {
       const next = defaults();

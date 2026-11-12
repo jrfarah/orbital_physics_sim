@@ -8,6 +8,7 @@ import {
   RGBAFormat,
   Scene,
   ShaderMaterial,
+  UnsignedByteType,
   Vector2,
   WebGLRenderTarget,
   type Camera,
@@ -34,10 +35,38 @@ function target(w: number, h: number, float: boolean): WebGLRenderTarget {
     minFilter: LinearFilter,
     magFilter: LinearFilter,
     format: RGBAFormat,
-    type: float ? HalfFloatType : undefined,
+    type: float ? HalfFloatType : UnsignedByteType,
     depthBuffer: true,
   });
   return rt;
+}
+
+let floatOk: boolean | null = null;
+
+function floatColor(renderer: WebGLRenderer): boolean {
+  if (floatOk !== null) return floatOk;
+  const gl = renderer.getContext();
+  floatOk = Boolean(gl.getExtension('EXT_color_buffer_half_float') || gl.getExtension('EXT_color_buffer_float'));
+  return floatOk;
+}
+
+function allocate(renderer: WebGLRenderer, w: number, h: number): WebGLRenderTarget {
+  const useFloat = floatColor(renderer);
+  const rt = target(w, h, useFloat);
+  if (!useFloat) return rt;
+  const prev = renderer.getRenderTarget();
+  renderer.setRenderTarget(rt);
+  const gl = renderer.getContext();
+  const complete = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
+  renderer.setRenderTarget(prev);
+  if (complete) return rt;
+  rt.dispose();
+  floatOk = false;
+  return target(w, h, false);
+}
+
+function glareScale(): number {
+  return floatOk === false ? 0.7 : 1;
 }
 
 let ember: WebGLRenderTarget | null = null;
@@ -96,10 +125,11 @@ const addMat = new ShaderMaterial({
   `,
 });
 
-function fit(rt: WebGLRenderTarget | null, w: number, h: number, float: boolean): WebGLRenderTarget {
-  if (rt && rt.width === w && rt.height === h) return rt;
+function fit(renderer: WebGLRenderer, rt: WebGLRenderTarget | null, w: number, h: number): WebGLRenderTarget {
+  const byte = floatOk === false;
+  if (rt && rt.width === w && rt.height === h && (byte || rt.texture.type === HalfFloatType)) return rt;
   rt?.dispose();
-  return target(w, h, float);
+  return allocate(renderer, w, h);
 }
 
 function blur(renderer: WebGLRenderer, source: WebGLRenderTarget, dest: WebGLRenderTarget, dir: Vector2): void {
@@ -111,20 +141,31 @@ function blur(renderer: WebGLRenderer, source: WebGLRenderTarget, dest: WebGLRen
   renderer.render(pass, ortho);
 }
 
-function ensureTargets(w: number, h: number, div: number): { viewW: number; viewH: number } {
-  const bw = Math.max(1, Math.floor(w / div));
-  const bh = Math.max(1, Math.floor(h / div));
+function ensureTargets(
+  renderer: WebGLRenderer,
+  w: number,
+  h: number,
+  div: number,
+  mobile: boolean,
+): { viewW: number; viewH: number } {
+  let bw = Math.max(1, Math.floor(w / div));
+  let bh = Math.max(1, Math.floor(h / div));
+  if (mobile) {
+    const canvas = renderer.domElement;
+    bw = Math.min(bw, Math.max(1, Math.floor((canvas.clientWidth * 1.25) / 8)));
+    bh = Math.min(bh, Math.max(1, Math.floor((canvas.clientHeight * 1.25) / 8)));
+  }
   const held = motionHeld();
   const grow = !ember || !blurA || !blurB || bw > ember.width || bh > ember.height || div !== divNow;
   if (!held && grow) {
-    ember = fit(ember, bw, bh, true);
-    blurA = fit(blurA, Math.max(1, Math.floor(bw / 2)), Math.max(1, Math.floor(bh / 2)), true);
-    blurB = fit(blurB, ember.width, ember.height, true);
+    ember = fit(renderer, ember, bw, bh);
+    blurA = fit(renderer, blurA, Math.max(1, Math.floor(bw / 2)), Math.max(1, Math.floor(bh / 2)));
+    blurB = fit(renderer, blurB, ember.width, ember.height);
     divNow = div;
   } else if (!ember || !blurA || !blurB) {
-    ember = fit(ember, bw, bh, true);
-    blurA = fit(blurA, Math.max(1, Math.floor(bw / 2)), Math.max(1, Math.floor(bh / 2)), true);
-    blurB = fit(blurB, ember.width, ember.height, true);
+    ember = fit(renderer, ember, bw, bh);
+    blurA = fit(renderer, blurA, Math.max(1, Math.floor(bw / 2)), Math.max(1, Math.floor(bh / 2)));
+    blurB = fit(renderer, blurB, ember.width, ember.height);
     divNow = div;
   }
   return {
@@ -136,7 +177,7 @@ function ensureTargets(w: number, h: number, div: number): { viewW: number; view
 /** Allocate the bloom targets and run the passes once so the driver links them before an animation. */
 export function prewarmBloom(renderer: WebGLRenderer, mobile: boolean): void {
   const size = renderer.getDrawingBufferSize(texel);
-  ensureTargets(Math.max(1, Math.floor(size.x)), Math.max(1, Math.floor(size.y)), bloomDiv(mobile));
+  ensureTargets(renderer, Math.max(1, Math.floor(size.x)), Math.max(1, Math.floor(size.y)), bloomDiv(mobile), mobile);
   const prev = renderer.getRenderTarget();
   blur(renderer, ember!, blurA!, dirX);
   blur(renderer, blurA!, blurB!, dirY);
@@ -158,7 +199,7 @@ export function renderComposited(
   const size = renderer.getDrawingBufferSize(texel);
   const w = Math.max(1, Math.floor(size.x));
   const h = Math.max(1, Math.floor(size.y));
-  const view = ensureTargets(w, h, bloomDiv(opts.mobile));
+  const view = ensureTargets(renderer, w, h, bloomDiv(opts.mobile), opts.mobile);
   const mask = camera.layers.mask;
   camera.layers.set(LAYER_EMBER);
   bloomOnly.value = 1;
@@ -183,7 +224,7 @@ export function renderComposited(
   blur(renderer, blurB!, blurA!, dirX);
   blur(renderer, blurA!, blurB!, dirY);
   addMat.uniforms.uBloom!.value = blurB!.texture;
-  addMat.uniforms.uGlare!.value = opts.glare;
+  addMat.uniforms.uGlare!.value = opts.glare * glareScale();
   quad.material = addMat;
   const clear = renderer.autoClear;
   renderer.autoClear = false;

@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
 import { fileURLToPath } from 'node:url';
-import { chromium } from 'playwright';
+import { chromium, devices, webkit } from 'playwright';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const port = await freePort();
@@ -27,6 +27,25 @@ try {
     process.exitCode = 1;
   } else {
     console.log('View-factor render check passed.');
+  }
+  for (const project of [
+    ['webkit iPhone', webkit, 'iPhone 13', null],
+    ['chromium Pixel', chromium, 'Pixel 7', 'chrome'],
+    ['webkit iPad', webkit, 'iPad (gen 7)', null],
+  ]) {
+    const [label, type, device, channel] = project;
+    const launched = await type.launch(channel ? { channel } : {});
+    const context = await launched.newContext({ ...devices[device] });
+    const mobile = await context.newPage();
+    try {
+      await mobile.goto(`http://127.0.0.1:${port}/#/debug/viewfactor`, { waitUntil: 'domcontentloaded' });
+      await mobile.waitForFunction(() => document.body.dataset.viewfactor, null, { timeout: 60_000 });
+      const status = await mobile.evaluate(() => document.body.dataset.viewfactor);
+      console.log(`${label}: ${status}`);
+      if (status !== 'pass') process.exitCode = 1;
+    } finally {
+      await launched.close();
+    }
   }
 } finally {
   await browser.close();

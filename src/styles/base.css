@@ -253,7 +253,10 @@ html, body, #app { height: 100%; }
   .scale-tag, .disc-tag { max-width: 42%; }
   #hud {
     flex: 1;
+    min-height: 0;
     overflow: auto;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-y;
     border: 0;
     padding: 12px;
   }

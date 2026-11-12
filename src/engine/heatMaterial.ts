@@ -147,7 +147,7 @@ export interface HeatMaterial extends MeshStandardMaterial {
 
 /** Shared by the instanced thermal tiles. Settings write these; the buffers stay put. */
 export const tileLayout = {
-  uSpacing: { value: 1 },
+  uSatSpacing: { value: 1 },
   uPhylloC: { value: Math.sqrt((1.25 * 5) / Math.PI) },
   uSide: { value: Math.sqrt(5) * 0.92 },
   uNTilesFrom: { value: 1 },
@@ -165,7 +165,7 @@ const TILE_PLACE = /* glsl */ `
 attribute float aSatIndex;
 attribute float aTileIndex;
 attribute float aBorn;
-uniform float uSpacing;
+uniform float uSatSpacing;
 uniform float uPhylloC;
 uniform float uSide;
 uniform float uNTilesFrom;
@@ -235,8 +235,8 @@ vec3 tileWorld(vec3 local) {
   vec2 qr = axialFromSat(aSatIndex);
   float q = qr.x;
   float r = qr.y;
-  float x = uSpacing * (q + r * 0.5);
-  float z = uSpacing * 0.86602540378 * r;
+  float x = uSatSpacing * (q + r * 0.5);
+  float z = uSatSpacing * 0.86602540378 * r;
   float theta = aTileIndex * uGolden;
   float rho = uPhylloC * sqrt(aTileIndex + 0.5);
   vec3 center = vec3(x + cos(theta) * rho, 0.02, z + sin(theta) * rho);
@@ -416,6 +416,36 @@ export function createSolarMaterial(): ShaderMaterial {
     uOpacity.value = mat.opacity;
   };
   bindDither(mat, ditherGate, ditherMode);
+  return mat;
+}
+
+/** Flat color per satellite, for the near-mode occupancy test. Not used in the frame. */
+export function createSatelliteIdMaterial(): ShaderMaterial {
+  const mat = new ShaderMaterial({
+    uniforms: { ...tileLayout },
+    toneMapped: false,
+    depthTest: false,
+    depthWrite: false,
+    vertexShader: /* glsl */ `
+${TILE_PLACE}
+varying float vId;
+varying float vSpan;
+void main() {
+  vSpan = tileSpan();
+  vId = aSatIndex + 1.0;
+  vec3 p = tileWorld(position);
+  gl_Position = projectionMatrix * viewMatrix * modelMatrix * vec4(p, 1.0);
+}
+`,
+    fragmentShader: /* glsl */ `
+varying float vId;
+varying float vSpan;
+void main() {
+  if (vSpan <= 0.001) discard;
+  gl_FragColor = vec4(floor(vId + 0.5) / 255.0, 0.0, 0.0, 1.0);
+}
+`,
+  });
   return mat;
 }
 

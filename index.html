@@ -4,6 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="theme-color" content="#05070c" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%2305070c'/%3E%3C/svg%3E" />
     <title>Orbital Data Centers · The Physics</title>
   </head>
   <body>
@@ -45,6 +46,33 @@
     </div>
     <div id="toast" role="status"></div>
     <button id="gl-overlay" type="button" hidden>Graphics reset – tap to reload</button>
+    <script>
+      (function () {
+        var node = document.createElement('div');
+        node.id = 'boot-error';
+        node.hidden = true;
+        node.setAttribute('role', 'alert');
+        var text = document.createElement('pre');
+        var dismiss = document.createElement('button');
+        dismiss.type = 'button';
+        dismiss.textContent = 'Dismiss';
+        dismiss.addEventListener('click', function () { node.hidden = true; });
+        node.append(text, dismiss);
+        function show(source, err) {
+          var message = err && err.message ? err.message : String(err);
+          if (String(message).indexOf('ResizeObserver loop') !== -1) return;
+          var stack = err && err.stack ? String(err.stack).split('\n').slice(0, 6).join('\n') : '';
+          var line = source + ': ' + message + (stack ? '\n' + stack : '');
+          text.textContent = text.textContent ? text.textContent + '\n\n' + line : line;
+          node.hidden = false;
+        }
+        window.__reportError = show;
+        window.__bootHook = true;
+        window.addEventListener('error', function (event) { show('error', event.error || event.message); });
+        window.addEventListener('unhandledrejection', function (event) { show('unhandledrejection', event.reason); });
+        if (document.body) document.body.append(node);
+      })();
+    </script>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

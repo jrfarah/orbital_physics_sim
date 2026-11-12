@@ -18,6 +18,7 @@ export const constellationMaterial = new ShaderMaterial({
     uM: { value: 8334 },
     uBlockPitch: { value: 1 },
     uRBlk: { value: 1 },
+    uDebugId: { value: 0 },
   },
   depthWrite: false,
   toneMapped: true,
@@ -42,6 +43,7 @@ export const constellationMaterial = new ShaderMaterial({
     uniform float uM;
     uniform float uBlockPitch;
     uniform float uRBlk;
+    uniform float uDebugId;
     varying vec3 vWorld;
 
     float ringOf(float index) {
@@ -170,6 +172,11 @@ export const constellationMaterial = new ShaderMaterial({
       vec3 color = edge > 0.0 ? mix(mean, glyph, detail) * edge : bg;
       vec3 lineCol = pow(vec3(92.0, 225.0, 255.0) / 255.0, vec3(2.2));
       color = mix(color, lineCol, outline * 0.18);
+      if (uDebugId > 0.5) {
+        if (edge <= 0.0) discard;
+        gl_FragColor = vec4((global + 1.0) / 255.0, 0.0, 0.0, 1.0);
+        return;
+      }
       gl_FragColor = vec4(color, 1.0);
     }
   `,

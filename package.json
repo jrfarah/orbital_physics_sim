@@ -12,6 +12,8 @@
     "check:layout": "node scripts/check-layout.mjs",
     "check:render": "node scripts/check-render.mjs",
     "check:visual": "node scripts/check-visual.mjs",
+    "check:satellites": "node scripts/check-satellites.mjs",
+    "check:mobile": "node scripts/check-mobile.mjs",
     "perf": "node scripts/perf.mjs"
   },
   "dependencies": {

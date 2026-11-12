@@ -2,12 +2,13 @@ import { spawn } from 'node:child_process';
 import { mkdir } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { fileURLToPath } from 'node:url';
-import { chromium } from 'playwright';
+import { chromium, devices, webkit } from 'playwright';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const tabs = ['radiator', 'thermal', 'kessler'];
 const viewports = [
   [375, 812],
+  [812, 375],
   [768, 1024],
   [1280, 800],
   [1440, 900],
@@ -75,6 +76,7 @@ try {
       }
     }
   }
+  await auditDevices(`http://127.0.0.1:${port}/`, offenders);
 } finally {
   await browser.close();
   preview.kill('SIGTERM');
@@ -109,6 +111,35 @@ async function insetAudit(page) {
     }
     return problems;
   });
+}
+
+async function auditDevices(origin, offenders) {
+  const projects = [
+    ['webkit iPhone', webkit, 'iPhone 13', null],
+    ['chromium Pixel', chromium, 'Pixel 7', 'chrome'],
+    ['webkit iPad', webkit, 'iPad (gen 7)', null],
+  ];
+  for (const [label, type, device, channel] of projects) {
+    const launched = await type.launch(channel ? { channel } : {});
+    const context = await launched.newContext({ ...devices[device] });
+    const page = await context.newPage();
+    try {
+      for (const tab of tabs) {
+        await page.goto(`${origin}#/${tab}`, { waitUntil: 'domcontentloaded' });
+        await page.waitForSelector('#canvas-host canvas');
+        await page.waitForTimeout(400);
+        offenders.push(...(await audit(page)).map((item) => `${label} ${tab}: ${item}`));
+      }
+      for (const power of [120e3, 1e9, 1e12]) {
+        await page.goto(`${origin}#/thermal?P=${power}`, { waitUntil: 'domcontentloaded' });
+        await page.waitForSelector('.scale-inset');
+        await page.waitForTimeout(700);
+        offenders.push(...(await audit(page)).map((item) => `${label} thermal ${power} W: ${item}`));
+      }
+    } finally {
+      await launched.close();
+    }
+  }
 }
 
 async function audit(page) {

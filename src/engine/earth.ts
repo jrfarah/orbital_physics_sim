@@ -21,6 +21,7 @@ import {
   UnsignedByteType,
   Vector3,
 } from 'three';
+import { deviceMemoryGb, onIdle } from './quality';
 import { getRenderer, isPointerDown, requestRender } from './renderer';
 
 export interface EarthBundle {
@@ -213,8 +214,7 @@ function prepare(tex: Texture, srgb: boolean): Texture {
 function wants8k(mobile: boolean): boolean {
   if (mobile) return false;
   try {
-    const mem = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
-    return getRenderer().capabilities.maxTextureSize >= 8192 && (mem === undefined || mem >= 8);
+    return getRenderer().capabilities.maxTextureSize >= 8192 && deviceMemoryGb() >= 8;
   } catch {
     return false;
   }
@@ -224,16 +224,15 @@ function hiResNames(mobile: boolean): { day: string[]; clouds: string[]; night: 
   let high = false;
   if (!mobile) {
     try {
-      const mem = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
-      high = getRenderer().capabilities.maxTextureSize >= 8192 && (mem === undefined || mem >= 8);
+      high = getRenderer().capabilities.maxTextureSize >= 8192 && deviceMemoryGb() >= 8;
     } catch {
       high = false;
     }
   }
   if (mobile) {
     return {
-      day: ['earth_day_4k.jpg', 'earth_day_2k.jpg'],
-      clouds: ['earth_clouds_2k.jpg'],
+      day: ['earth_day_2k.jpg'],
+      clouds: ['earth_clouds_1k.jpg'],
       night: ['earth_night_2k.jpg'],
     };
   }
@@ -400,8 +399,7 @@ export function createEarth(mobile: boolean): EarthBundle {
   const scheduleFinest = () => {
     const step = () => {
       if (isPointerDown()) {
-        const wait = window.requestIdleCallback ?? ((fn: () => void) => window.setTimeout(fn, 500));
-        wait(() => step());
+        onIdle(() => step());
         return;
       }
       loader.load(
@@ -418,8 +416,7 @@ export function createEarth(mobile: boolean): EarthBundle {
         () => undefined,
       );
     };
-    const wait = window.requestIdleCallback ?? ((fn: () => void) => window.setTimeout(fn, 500));
-    wait(() => step());
+    onIdle(() => step());
   };
 
   const names = hiResNames(mobile);

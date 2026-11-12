@@ -1,6 +1,7 @@
 import {
   AmbientLight,
   BoxGeometry,
+  Color,
   CylinderGeometry,
   DirectionalLight,
   EdgesGeometry,
@@ -9,10 +10,10 @@ import {
   LineBasicMaterial,
   LineSegments,
   Material,
-  Matrix4,
   Mesh,
   MeshStandardMaterial,
   Object3D,
+  OrthographicCamera,
   DynamicDrawUsage,
   Scene,
   WebGLRenderTarget,
@@ -23,7 +24,7 @@ import { Line2 } from 'three/examples/jsm/lines/Line2.js';
 import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import { CSS2DObject, CSS2DRenderer } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
-import { createEmberMaterial, createSolarMaterial, emberLinear, setDither, setHeat, setTilePx, tileLayout, type HeatMaterial } from '../../engine/heatMaterial';
+import { createEmberMaterial, createSatelliteIdMaterial, createSolarMaterial, emberLinear, setDither, setHeat, setTilePx, tileLayout, type HeatMaterial } from '../../engine/heatMaterial';
 import { span } from '../../engine/marks';
 import { holdMotion } from '../../engine/motion';
 import { LAYER_EMBER, prewarmBloom } from '../../engine/post';
@@ -40,7 +41,8 @@ import {
 } from '../../engine/renderer';
 import { el } from '../../ui/readout';
 import { constellationMaterial, createConstellationMesh } from './constellation';
-import { BLOCK_M, blockCount, blockMetrics, footprintRadius, hexOuterRadius } from './hex';
+import { instanceBudget, maxTilesPerSatellite } from './capacity';
+import { BLOCK_M, blockCount, blockMetrics, footprintRadius, hexOuterRadius, ringOf } from './hex';
 import { mountScaleInset } from './inset';
 
 const RING_SEGMENTS = 96;
@@ -53,9 +55,8 @@ for (let s = 0; s <= RING_SEGMENTS; s++) {
 
 const GOLDEN = Math.PI * (3 - Math.sqrt(5));
 const TILE = 5;
-const TILE_CAP = 256;
-const NEAR_CAP = 150;
-const MAX = NEAR_CAP * TILE_CAP;
+/** Instance stride: max tiles at the slider extremes, so a settings change never runs out of indices. */
+const STRIDE = maxTilesPerSatellite();
 const FADE_MS = 250;
 const RING_OPACITY = [0.55, 0.35, 0.2];
 export interface ThermalLayout {
@@ -109,6 +110,7 @@ interface Ease {
 }
 
 export function createThermalScene(overlay: HTMLElement) {
+  const { nearCap: NEAR_CAP, maxInstances: MAX } = instanceBudget(STRIDE, isMobile());
   const scene = new Scene();
   const sun = new DirectionalLight(0xffffff, 1.35);
   sun.position.set(0.4, 1, 0.7);
@@ -120,7 +122,7 @@ export function createThermalScene(overlay: HTMLElement) {
   camera.position.set(30, 24, 30);
   camera.updateProjectionMatrix();
   let controls = createControls(camera, { min: 0.2, max: 1e8 });
-  controls.enablePan = false;
+  controls.enablePan = isMobile();
   controls.target.set(0, 0, 0);
 
   const hexGeo = new CylinderGeometry(1, 1, 0.08, 6);
@@ -134,7 +136,7 @@ export function createThermalScene(overlay: HTMLElement) {
   hex.add(edges);
   scene.add(hex);
 
-  const slots = [makeSlot(), makeSlot()];
+  const slots = [makeSlot(MAX, STRIDE), makeSlot(MAX, STRIDE)];
   const field = createConstellationMesh();
   scene.add(slots[0].mesh, slots[0].solar, slots[1].mesh, slots[1].solar, field);
   const fieldEmber = new Vector3(0.4, 0.05, 0.02);
@@ -269,7 +271,7 @@ export function createThermalScene(overlay: HTMLElement) {
   }
 
   function holeCount(): number {
-    return Math.min(NEAR_CAP, Math.max(0, Math.floor(liveN + 1e-6)));
+    return Math.min(NEAR_CAP, Math.max(0, Math.ceil(liveN - 1e-9)));
   }
 
   function chooseField(px: number): void {
@@ -354,30 +356,42 @@ export function createThermalScene(overlay: HTMLElement) {
     }
   }
 
-  function pushTileCounts(nowMs: number): void {
+  /** The only writer of the layout uniforms. Every power, settings, and mode change comes through here. */
+  function applyLayoutUniforms(nowMs: number, spacing: number, nSat: number): void {
+    if (!easeReady) return;
     const now = nowMs / 1000;
     tileLayout.uNow.value = now;
+    tileLayout.uSatSpacing.value = spacing;
+    tileLayout.uPhylloC.value = targetFoot.c;
     tileLayout.uSide.value = targetFoot.side;
+    tileLayout.uNSat.value = nSat;
+    const tiles = targetFoot.tiles;
+    const nRad = targetFoot.nRad;
     if (!countsReady) {
-      tileLayout.uNTilesFrom.value = targetFoot.tiles;
-      tileLayout.uNTilesTo.value = targetFoot.tiles;
-      tileLayout.uNRadFrom.value = targetFoot.nRad;
-      tileLayout.uNRadTo.value = targetFoot.nRad;
+      tileLayout.uNTilesFrom.value = tiles;
+      tileLayout.uNTilesTo.value = tiles;
+      tileLayout.uNRadFrom.value = nRad;
+      tileLayout.uNRadTo.value = nRad;
       tileLayout.uChangeT0.value = now - 10;
       tileLayout.uKindT0.value = now - 10;
       countsReady = true;
       return;
     }
-    if (tileLayout.uNTilesTo.value !== targetFoot.tiles) {
+    if (tileLayout.uNTilesTo.value !== tiles) {
       tileLayout.uNTilesFrom.value = tileLayout.uNTilesTo.value;
-      tileLayout.uNTilesTo.value = targetFoot.tiles;
+      tileLayout.uNTilesTo.value = tiles;
       tileLayout.uChangeT0.value = now;
     }
-    if (tileLayout.uNRadTo.value !== targetFoot.nRad) {
+    if (tileLayout.uNRadTo.value !== nRad) {
       tileLayout.uNRadFrom.value = tileLayout.uNRadTo.value;
-      tileLayout.uNRadTo.value = targetFoot.nRad;
+      tileLayout.uNRadTo.value = nRad;
       tileLayout.uKindT0.value = now;
     }
+  }
+
+  function shownSatellites(): number {
+    if (!(shownNear || windowed || fieldFade)) return 0;
+    return Math.min(NEAR_CAP, Math.max(0, Math.ceil(liveN - 1e-9)));
   }
 
   function tileAnimLive(nowMs: number): boolean {
@@ -390,27 +404,26 @@ export function createThermalScene(overlay: HTMLElement) {
 
   function revealSatellites(instant: boolean): void {
     const slot = slots[0]!;
-    const drawN = Math.min(NEAR_CAP, Math.max(0, Math.floor(liveN + 1e-6)));
+    const drawN = Math.min(NEAR_CAP, Math.max(0, Math.ceil(liveN - 1e-9)));
     if (drawN > bornSats && slot.bornAttr) {
       const now = performance.now() / 1000;
       const stamp = instant || reducedMotion() ? Math.max(0.05, now - 10) : now;
       const array = slot.bornAttr.array as Float32Array;
       for (let sat = bornSats; sat < drawN; sat++) {
-        const base = sat * TILE_CAP;
-        for (let tile = 0; tile < TILE_CAP; tile++) array[base + tile] = stamp;
+        const base = sat * STRIDE;
+        for (let tile = 0; tile < STRIDE; tile++) array[base + tile] = stamp;
       }
       slot.bornAttr.clearUpdateRanges();
-      slot.bornAttr.addUpdateRange(bornSats * TILE_CAP, (drawN - bornSats) * TILE_CAP);
+      slot.bornAttr.addUpdateRange(bornSats * STRIDE, (drawN - bornSats) * STRIDE);
       slot.bornAttr.needsUpdate = true;
       lastBorn = stamp;
       bornSats = drawN;
     }
-    const count = drawN * TILE_CAP;
+    const count = drawN * STRIDE;
     slot.count = count;
     slot.mesh.count = count;
     slot.solar.count = count;
     slot.side = liveFoot.side;
-    tileLayout.uNSat.value = drawN;
   }
 
   function layout(next: ThermalLayout, drag = false, follow: 'fit' | 'track' | 'out' | 'auto' = 'auto'): void {
@@ -448,12 +461,10 @@ export function createThermalScene(overlay: HTMLElement) {
     emberHeat = heat;
     setHeat(slots[0]!.mat, heat);
     setHeat(slots[1]!.mat, heat);
-    tileLayout.uSpacing.value = liveFoot.spacing;
-    tileLayout.uPhylloC.value = liveFoot.c;
-    pushTileCounts(now);
     syncDisc(heat, liveFoot);
     if (shownNear || windowed || fieldFade) revealSatellites(fieldFade !== null || bornSats === 0);
     else clearTiles();
+    applyLayoutUniforms(now, liveFoot.spacing, shownSatellites());
     const shownCount = Math.max(1, Math.ceil(liveN - 1e-9));
     const text = shownCount > BLOCK_M
       ? `${blockCount(shownCount).toLocaleString('en-US')} gigawatt blocks · ${BLOCK_M.toLocaleString('en-US')} satellites each · 1 satellite = 120 kW`
@@ -749,16 +760,14 @@ export function createThermalScene(overlay: HTMLElement) {
         let live = tickSlot(slots[shown]!, now, dt);
         if (slots[0] !== slots[shown]) live = tickSlot(slots[0]!, now, dt) || live;
         if (live) reasons.push('tile-tween');
-        tileLayout.uNow.value = now / 1000;
         if (easeLive(rSatEase, now) || easeLive(rRadEase, now) || easeLive(cEase, now)) {
           liveFoot = footNow(now);
           outer = footprintRadius(Math.max(liveN, 1), liveFoot.spacing, liveFoot.rSat);
-          tileLayout.uSpacing.value = liveFoot.spacing;
-          tileLayout.uPhylloC.value = liveFoot.c;
           syncDisc(emberHeat, liveFoot);
           live = true;
           reasons.push('spacing');
         }
+        applyLayoutUniforms(now, liveFoot.spacing, shownSatellites());
         if (tileAnimLive(now)) {
           live = true;
           reasons.push('tiles');
@@ -776,6 +785,7 @@ export function createThermalScene(overlay: HTMLElement) {
               if (shownNear || windowed || fieldFade) revealSatellites(true);
               else clearTiles();
               syncDisc(emberHeat, liveFoot);
+              applyLayoutUniforms(now, liveFoot.spacing, shownSatellites());
             }
           }
         }
@@ -947,6 +957,7 @@ export function createThermalScene(overlay: HTMLElement) {
   function updateRingScreens(): boolean {
     const buffer = getRenderer().getDrawingBufferSize(ringResolution);
     let changed = false;
+    const placed: { x: number; y: number }[] = [];
     for (const ring of ringSlots) {
       ring.material.resolution.set(buffer.x, buffer.y);
       if (ring.radius <= 0) continue;
@@ -954,7 +965,10 @@ export function createThermalScene(overlay: HTMLElement) {
       const edge = project(ring.radius, 0, 0);
       const px = Math.hypot(edge.x - origin.x, edge.y - origin.y);
       const dot = px < 6;
-      const showLabel = px >= 24 || dot;
+      // Collapsed rings share one screen point. A second label there covers the first.
+      let showLabel = px >= 24 || dot;
+      if (showLabel && placed.some((point) => Math.hypot(point.x - edge.x, point.y - edge.y) < 22)) showLabel = false;
+      if (showLabel) placed.push({ x: edge.x, y: edge.y });
       if (ring.line.visible !== !dot) {
         ring.line.visible = !dot;
         changed = true;
@@ -1053,6 +1067,86 @@ export function createThermalScene(overlay: HTMLElement) {
     }
   }
 
+  const idMat = createSatelliteIdMaterial();
+  const idTarget = new WebGLRenderTarget(512, 512, { depthBuffer: false });
+  const idScene = new Scene();
+  const idCam = new OrthographicCamera(-1, 1, 1, -1, 0.01, 5000);
+  idCam.position.set(0, 400, 0);
+  idCam.up.set(0, 0, -1);
+  idCam.lookAt(0, 0, 0);
+  const idColor = new Color();
+
+  function frameIdCamera(radius: number): void {
+    const span = Math.max(radius, 1);
+    idCam.left = -span;
+    idCam.right = span;
+    idCam.top = span;
+    idCam.bottom = -span;
+    idCam.updateProjectionMatrix();
+  }
+
+  function readIds(into: Set<number>): void {
+    const buf = new Uint8Array(512 * 512 * 4);
+    getRenderer().readRenderTargetPixels(idTarget, 0, 0, 512, 512, buf);
+    for (let i = 0; i < buf.length; i += 4) {
+      const id = buf[i] ?? 0;
+      if (id > 0) into.add(id);
+    }
+  }
+
+  function countVisibleSatellites(): number {
+    const renderer = getRenderer();
+    const prevTarget = renderer.getRenderTarget();
+    renderer.getClearColor(idColor);
+    const prevAlpha = renderer.getClearAlpha();
+    const ids = new Set<number>();
+    renderer.setRenderTarget(idTarget);
+    renderer.setClearColor(0x000000, 1);
+    try {
+      const mesh = slots[0]!.mesh;
+      if (mesh.count > 0) {
+        const parent = mesh.parent;
+        const prevMat = mesh.material;
+        mesh.material = idMat;
+        const drawn = Math.max(1, Math.floor(mesh.count / STRIDE));
+        const reach = ringOf(drawn - 1);
+        frameIdCamera(liveFoot.spacing * (reach + 1.5) + liveFoot.rSat);
+        idScene.add(mesh);
+        renderer.clear();
+        renderer.render(idScene, idCam);
+        readIds(ids);
+        mesh.material = prevMat;
+        parent?.add(mesh);
+      }
+      if (field.visible) {
+        const uniforms = constellationMaterial.uniforms;
+        const prevDebug = uniforms.uDebugId!.value as number;
+        const prevHole = uniforms.uHole!.value as number;
+        const prevMode = uniforms.uDitherMode!.value as number;
+        uniforms.uDebugId!.value = 1;
+        uniforms.uHole!.value = -1;
+        uniforms.uDitherMode!.value = -1;
+        const parent = field.parent;
+        frameIdCamera(Math.max(field.scale.x, 1) * 1.05);
+        idScene.add(field);
+        renderer.clear();
+        renderer.render(idScene, idCam);
+        readIds(ids);
+        parent?.add(field);
+        uniforms.uDebugId!.value = prevDebug;
+        uniforms.uHole!.value = prevHole;
+        uniforms.uDitherMode!.value = prevMode;
+      }
+    } finally {
+      renderer.setRenderTarget(prevTarget);
+      renderer.setClearColor(idColor, prevAlpha);
+    }
+    return ids.size;
+  }
+
+  const debugWindow = window as Window & { __countSatellites?: () => number };
+  debugWindow.__countSatellites = countVisibleSatellites;
+
   return {
     layout,
     setRings,
@@ -1064,7 +1158,7 @@ export function createThermalScene(overlay: HTMLElement) {
     rebind() {
       controls.dispose();
       controls = createControls(camera, { min: 0.2, max: 1e8 });
-      controls.enablePan = false;
+      controls.enablePan = isMobile();
       controls.target.set(0, 0, 0);
       bindControls();
       controls.update();
@@ -1075,49 +1169,59 @@ export function createThermalScene(overlay: HTMLElement) {
   };
 }
 
-function makeSlot(): Slot {
+function makeSlot(count: number, stride: number): Slot {
   const geo = new BoxGeometry(1, 0.04, 1);
-  const satIndex = new Float32Array(MAX);
-  const tileIndex = new Float32Array(MAX);
-  for (let i = 0; i < MAX; i++) {
-    satIndex[i] = Math.floor(i / TILE_CAP);
-    tileIndex[i] = i % TILE_CAP;
+  const satIndex = new Float32Array(count);
+  const tileIndex = new Float32Array(count);
+  for (let i = 0; i < count; i++) {
+    satIndex[i] = Math.floor(i / stride);
+    tileIndex[i] = i % stride;
   }
   const satAttr = new InstancedBufferAttribute(satIndex, 1);
   const tileAttr = new InstancedBufferAttribute(tileIndex, 1);
-  const bornAttr = new InstancedBufferAttribute(new Float32Array(MAX), 1);
+  const bornAttr = new InstancedBufferAttribute(new Float32Array(count), 1);
   bornAttr.setUsage(DynamicDrawUsage);
   geo.setAttribute('aSatIndex', satAttr);
   geo.setAttribute('aTileIndex', tileAttr);
   geo.setAttribute('aBorn', bornAttr);
-  const scale = new InstancedBufferAttribute(new Float32Array(MAX), 1);
-  const mix = new InstancedBufferAttribute(new Float32Array(MAX), 1);
+  const scale = new InstancedBufferAttribute(new Float32Array(count), 1);
+  const mix = new InstancedBufferAttribute(new Float32Array(count), 1);
   geo.setAttribute('aScale', scale);
   geo.setAttribute('aMix', mix);
   const solarGeo = geo.clone();
   solarGeo.setAttribute('aSatIndex', satAttr);
   solarGeo.setAttribute('aTileIndex', tileAttr);
   solarGeo.setAttribute('aBorn', bornAttr);
-  const solarScale = new InstancedBufferAttribute(new Float32Array(MAX), 1);
-  const solarMix = new InstancedBufferAttribute(new Float32Array(MAX), 1);
+  const solarScale = new InstancedBufferAttribute(new Float32Array(count), 1);
+  const solarMix = new InstancedBufferAttribute(new Float32Array(count), 1);
   solarGeo.setAttribute('aScale', solarScale);
   solarGeo.setAttribute('aMix', solarMix);
   const mat = createEmberMaterial({ instanced: true, heat01: 0.51 });
   const solarMat = createSolarMaterial();
   mat.envMap = null;
   mat.envMapIntensity = 0;
-  const mesh = new InstancedMesh(geo, mat, MAX);
-  const solar = new InstancedMesh(solarGeo, solarMat, MAX);
+  const mesh = new InstancedMesh(geo, mat, count);
+  const solar = new InstancedMesh(solarGeo, solarMat, count);
   mesh.layers.enable(LAYER_EMBER);
   mesh.count = 0;
   solar.count = 0;
   mesh.frustumCulled = false;
   solar.frustumCulled = false;
-  const identity = new Matrix4();
-  for (let i = 0; i < MAX; i++) {
-    mesh.setMatrixAt(i, identity);
-    solar.setMatrixAt(i, identity);
+  const emberArray = mesh.instanceMatrix.array as Float32Array;
+  const solarArray = solar.instanceMatrix.array as Float32Array;
+  for (let i = 0; i < count; i++) {
+    const offset = i * 16;
+    emberArray[offset] = 1;
+    emberArray[offset + 5] = 1;
+    emberArray[offset + 10] = 1;
+    emberArray[offset + 15] = 1;
+    solarArray[offset] = 1;
+    solarArray[offset + 5] = 1;
+    solarArray[offset + 10] = 1;
+    solarArray[offset + 15] = 1;
   }
+  mesh.instanceMatrix.needsUpdate = true;
+  solar.instanceMatrix.needsUpdate = true;
   mesh.instanceMatrix.setUsage(DynamicDrawUsage);
   solar.instanceMatrix.setUsage(DynamicDrawUsage);
   scale.setUsage(DynamicDrawUsage);
@@ -1140,12 +1244,12 @@ function makeSlot(): Slot {
     side: Math.sqrt(5) * 0.92,
     c: Math.sqrt((1.25 * 5) / Math.PI),
     count: 0,
-    born: new Float64Array(MAX),
-    die: new Float64Array(MAX),
-    mixNow: new Float32Array(MAX),
-    mixTo: new Float32Array(MAX).fill(1),
+    born: new Float64Array(count),
+    die: new Float64Array(count),
+    mixNow: new Float32Array(count),
+    mixTo: new Float32Array(count).fill(1),
     hot: [],
-    hotOn: new Uint8Array(MAX),
+    hotOn: new Uint8Array(count),
     bornAttr,
   };
 }
@@ -1161,7 +1265,7 @@ export function satelliteFootprint(aRad: number, aTot: number): {
 } {
   const side = Math.sqrt(TILE) * 0.92;
   const c = Math.sqrt((1.25 * TILE) / Math.PI);
-  const tiles = Math.max(1, Math.min(TILE_CAP, Math.round(Math.max(aTot, 1) / TILE)));
+  const tiles = Math.max(1, Math.min(STRIDE, Math.round(Math.max(aTot, 1) / TILE)));
   const nRad = Math.min(tiles, Math.max(0, Math.round(Math.max(aRad, 0) / TILE)));
   const rSat = c * Math.sqrt(Math.max(tiles - 1, 0) + 0.5) + side;
   const rRad = nRad <= 0 ? 0 : c * Math.sqrt(Math.max(nRad - 1, 0) + 0.5) + side * 0.5;

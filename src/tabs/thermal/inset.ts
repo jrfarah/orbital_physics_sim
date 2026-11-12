@@ -322,8 +322,9 @@ export function mountScaleInset(overlay: HTMLElement): { setArea: (m2: number) =
   const draw = () => {
     if (!svg.isConnected) return;
     const mobile = window.matchMedia('(max-width: 899px)').matches;
-    const w = mobile ? 180 : 240;
-    const h = mobile ? 130 : 170;
+    const w = mobile ? 150 : 240;
+    const h = mobile ? 110 : 170;
+    title.setAttribute('font-size', mobile ? '10' : '11');
     const sizeChanged = mobile !== lastMobile;
     if (sizeChanged) {
       lastMobile = mobile;

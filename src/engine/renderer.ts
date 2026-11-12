@@ -3,6 +3,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { noteSlow, span } from './marks';
 import { motionHeld } from './motion';
 import { renderComposited } from './post';
+import { reportError } from './errors';
 import { presenterOn, subscribePresenter } from './presenter';
 
 export interface TabView {
@@ -86,11 +87,27 @@ export function subscribePerf(fn: (sample: PerfSample) => void): () => void {
 }
 
 export function reducedMotion(): boolean {
-  return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  try {
+    return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  } catch {
+    return false;
+  }
+}
+
+let textureLimited = false;
+
+/** Called once the real WebGL context exists. A phone GPU below 8k is the mobile tier. */
+export function noteGpuTier(maxTextureSize: number): void {
+  textureLimited = maxTextureSize < 8192;
 }
 
 export function isMobile(): boolean {
-  return window.matchMedia('(max-width: 899px), (pointer: coarse)').matches;
+  try {
+    if (textureLimited) return true;
+    return window.matchMedia('(pointer: coarse), (max-width: 899px)').matches;
+  } catch {
+    return textureLimited;
+  }
 }
 
 export function getCanvas(): HTMLCanvasElement {
@@ -346,7 +363,21 @@ function installUploadCounter(gl: WebGL2RenderingContext): void {
     if (!src) return;
     uploadBytes += src.byteLength;
   };
-  gl.bufferSubData = ((target: number, offset: number, src: ArrayBufferView) => {
+  gl.bufferSubData = ((
+    target: number,
+    offset: number,
+    src: ArrayBufferView,
+    srcOffset?: number,
+    length?: number,
+  ) => {
+    // Three uploads a sub-range with the 5-argument form. Dropping those
+    // arguments writes the whole buffer past its end, WebGL rejects it, and
+    // every satellite added after the first never receives its birth time.
+    if (typeof srcOffset === 'number' && typeof length === 'number') {
+      const per = 'BYTES_PER_ELEMENT' in src ? Number(src.BYTES_PER_ELEMENT) : 1;
+      uploadBytes += length * per;
+      return sub(target, offset, src, srcOffset, length);
+    }
     add(src);
     return sub(target, offset, src);
   }) as typeof gl.bufferSubData;
@@ -380,6 +411,11 @@ export function mountRenderer(container: HTMLElement): void {
   renderer.toneMappingExposure = 1.15;
   renderer.setClearColor(0x05070c, 1);
   installUploadCounter(renderer.getContext() as WebGL2RenderingContext);
+  noteGpuTier(renderer.capabilities.maxTextureSize);
+  renderer.debug.onShaderError = (gl, _program, vertex, fragment) => {
+    const message = [gl.getShaderInfoLog(vertex), gl.getShaderInfoLog(fragment)].filter(Boolean).join('\n');
+    reportError('shader', message || 'shader program failed to link');
+  };
   cap = initialRatio();
   adaptive = cap;
   ratio = cap;
@@ -408,18 +444,35 @@ export function mountRenderer(container: HTMLElement): void {
   canvas.addEventListener('webglcontextlost', (event) => {
     event.preventDefault();
     show();
+    reportError('webglcontextlost', 'Graphics context was lost');
   });
   canvas.addEventListener('webglcontextrestored', show);
   overlay?.addEventListener('click', () => location.reload());
-  const observer = new ResizeObserver(() => {
-    if (!host || !renderer) return;
-    const w = Math.max(1, host.clientWidth);
-    const h = Math.max(1, host.clientHeight);
-    if (w === sizedW && h === sizedH && Math.abs(renderer.getPixelRatio() - ratio) < 0.01) return;
-    applySize();
-    requestRender();
-  });
-  observer.observe(container);
+  let resizeQueued = false;
+  const onResize = () => {
+    if (resizeQueued) return;
+    resizeQueued = true;
+    requestAnimationFrame(() => {
+      resizeQueued = false;
+      if (!host || !renderer) return;
+      const w = Math.max(1, host.clientWidth);
+      const h = Math.max(1, host.clientHeight);
+      if (w === sizedW && h === sizedH && Math.abs(renderer.getPixelRatio() - ratio) < 0.01) return;
+      applySize();
+      requestRender();
+    });
+  };
+  if (typeof ResizeObserver === 'function') {
+    try {
+      const observer = new ResizeObserver(onResize);
+      observer.observe(container);
+    } catch (err) {
+      reportError('resize', err);
+      window.addEventListener('resize', onResize);
+    }
+  } else {
+    window.addEventListener('resize', onResize);
+  }
   subscribePresenter(() => {
     cap = initialRatio();
     adaptive = Math.min(adaptive, cap);

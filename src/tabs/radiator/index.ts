@@ -52,7 +52,8 @@ export function createRadiatorTab(summary: (text: string) => void) {
   };
 
   const tag = el('div', 'scale-tag', 'not to scale');
-  const scene = createRadiatorScene(isMobile(), tag);
+  let scene: ReturnType<typeof createRadiatorScene> | null = isMobile() ? null : createRadiatorScene(false, tag);
+  const live = (): ReturnType<typeof createRadiatorScene> => (scene ??= createRadiatorScene(true, tag));
   const hud = el('div');
   const key = card('Heat shed (both faces)');
   key.element.classList.add('hero');
@@ -116,7 +117,7 @@ export function createRadiatorTab(summary: (text: string) => void) {
       { value: 'sat', label: 'From the satellite' },
     ],
     value: 'sat',
-    onChange: (value) => scene.setPreset(value),
+    onChange: (value) => live().setPreset(value),
   });
   cameraPick.element.classList.add('stage-presets');
 
@@ -161,8 +162,8 @@ export function createRadiatorTab(summary: (text: string) => void) {
       panel.refresh();
       wrapped();
     },
-    onFocus: () => scene.focusPanel(),
-    onReset: () => scene.view().resetView(),
+    onFocus: () => live().focusPanel(),
+    onReset: () => live().view().resetView(),
     onSources: () => openSources('Assumptions & sources', content.sources.radiator),
     onEquations: () => void openEquations('Equations', content.equations.radiator),
   });
@@ -177,10 +178,10 @@ export function createRadiatorTab(summary: (text: string) => void) {
     const n = faceNormalFromAngles(r, state.tilt * DEG, state.heading * DEG);
     const coat = COATINGS[state.coating];
     const result = radiator(state.hKm, r, n, coat.alpha, coat.eps, state.tempK);
-    scene.update(state.hKm, r, n, frame.east, result, state.showView);
+    live().update(state.hKm, r, n, frame.east, result, state.showView);
     if (dragArmed !== state.drag) {
       dragArmed = state.drag;
-      scene.setDrag(state.drag, (phi, theta) => {
+      live().setDrag(state.drag, (phi, theta) => {
         state.phi = Math.max(-180, Math.min(180, phi));
         state.theta = Math.max(-90, Math.min(90, theta));
         panel.refresh();
@@ -221,7 +222,7 @@ export function createRadiatorTab(summary: (text: string) => void) {
     const up = new Vector3(zenith[0], zenith[1], zenith[2]);
     const nrm = new Vector3(north[0], north[1], north[2]);
     const n = new Vector3(normal[0], normal[1], normal[2]);
-    scene.captureFisheye(
+    live().captureFisheye(
       [
         { normal: n, zenith: up, north: nrm, canvas: faceA.canvas },
         { normal: n.clone().multiplyScalar(-1), zenith: up, north: nrm, canvas: faceB.canvas },
@@ -308,19 +309,19 @@ export function createRadiatorTab(summary: (text: string) => void) {
     corner: cameraPick.element,
     tag,
     show() {
-      document.getElementById('stage')?.append(tag, scene.overlay);
-      scene.rebind();
-      const view = scene.view();
+      document.getElementById('stage')?.append(tag, live().overlay);
+      live().rebind();
+      const view = live().view();
       setActiveView(view);
       wrapped();
     },
     hide() {
       tag.remove();
-      scene.overlay.remove();
-      scene.detach();
+      live().overlay.remove();
+      live().detach();
     },
     reset() {
-      scene.view().resetView();
+      live().view().resetView();
     },
     readParams(params: URLSearchParams) {
       const num = (k: string, fallback: number) => (params.has(k) ? Number(params.get(k)) : fallback);

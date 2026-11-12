@@ -306,8 +306,16 @@ export function createSegmented<T extends string>(opts: {
       item.button.style.textOverflow = 'clip';
     }
   };
-  const observer = new ResizeObserver(fit);
-  observer.observe(row);
+  if (typeof ResizeObserver === 'function') {
+    try {
+      const observer = new ResizeObserver(() => requestAnimationFrame(fit));
+      observer.observe(row);
+    } catch {
+      requestAnimationFrame(fit);
+    }
+  } else {
+    requestAnimationFrame(fit);
+  }
   requestAnimationFrame(fit);
   const paint = () => {
     for (const item of buttons) item.button.setAttribute('aria-pressed', String(item.opt.value === value));

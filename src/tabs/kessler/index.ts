@@ -11,7 +11,7 @@ import {
   createSlider,
   createToggle,
 } from '../../ui/controls';
-import { reducedMotion, setActiveView } from '../../engine/renderer';
+import { isMobile, reducedMotion, setActiveView } from '../../engine/renderer';
 import {
   kessler,
   kesslerShellRates,
@@ -95,7 +95,8 @@ export function createKesslerTab(summary: (text: string) => void) {
   const state = defaults();
   const tip = el('div', 'shell-tip card');
   tip.hidden = true;
-  const scene = createKesslerScene(tip);
+  let scene: ReturnType<typeof createKesslerScene> | null = isMobile() ? null : createKesslerScene(tip);
+  const live = (): ReturnType<typeof createKesslerScene> => (scene ??= createKesslerScene(tip));
   const hud = el('div', 'grid-2');
 
   const banner = el('div', 'card hero span-2');
@@ -170,7 +171,7 @@ export function createKesslerTab(summary: (text: string) => void) {
     value: reducedMotion(),
     onChange: (on) => {
       state.paused = on;
-      scene.setPaused(on);
+      live().setPaused(on);
     },
   });
   pause.element.classList.add('hud-corner');
@@ -379,7 +380,7 @@ export function createKesslerTab(summary: (text: string) => void) {
     value: true,
     onChange: (on) => {
       state.debris = on;
-      scene.setDebris(on);
+      live().setDebris(on);
     },
   });
 
@@ -427,7 +428,7 @@ export function createKesslerTab(summary: (text: string) => void) {
   footer.append(
     button('Assumptions & sources', () => openSources('Assumptions & sources', content.sources.kessler)),
     button('Equations', () => void openEquations('Equations', content.equations.kessler)),
-    button('Reset view', () => scene.view().resetView()),
+    button('Reset view', () => live().view().resetView()),
   );
 
   function button(label: string, onClick: () => void): HTMLButtonElement {
@@ -454,8 +455,8 @@ export function createKesslerTab(summary: (text: string) => void) {
     debrisToggle.setValue(state.debris, true);
     band.element.hidden = state.preset !== 'custom';
     pause.setValue(state.paused, true);
-    scene.setPaused(state.paused);
-    scene.setDebris(state.debris);
+    live().setPaused(state.paused);
+    live().setDebris(state.debris);
   }
 
   function applyScenario(kind: 'filed' | 'best' | 'starlink'): void {
@@ -499,7 +500,7 @@ export function createKesslerTab(summary: (text: string) => void) {
 
   function recompute(): void {
     const result = resultOf();
-    scene.resetSim();
+    live().resetSim();
     const rates = kesslerShellRates({
       rateWPerYr: state.rate,
       LYr: state.L,
@@ -514,7 +515,7 @@ export function createKesslerTab(summary: (text: string) => void) {
       coord: state.coord,
     });
     sizePower.textContent = fmtPower(state.area * W_PER_M2);
-    const count = scene.apply(result.shells, {
+    const count = live().apply(result.shells, {
       area: result.A_sat,
       kills: rates.kills,
       coll: rates.coll_total,
@@ -606,17 +607,17 @@ export function createKesslerTab(summary: (text: string) => void) {
     controls,
     corner: pause.element,
     show() {
-      scene.rebind();
-      setActiveView(scene.view());
+      live().rebind();
+      setActiveView(live().view());
       shown = true;
       wrapped();
     },
     hide() {
       shown = false;
-      scene.detach();
+      live().detach();
     },
     reset() {
-      if (shown) scene.view().resetView();
+      if (shown) live().view().resetView();
     },
     readParams(params: URLSearchParams) {
       const next = defaults();

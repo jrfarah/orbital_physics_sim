@@ -7,6 +7,7 @@ import './styles/tokens.css';
 import './styles/base.css';
 import './styles/components.css';
 import { content } from './content';
+import { installErrorReporter, reportError } from './engine/errors';
 import { mountPerfHud } from './engine/perfHud';
 import { mountPresenter } from './engine/presenter';
 import { mountRenderer } from './engine/renderer';
@@ -42,6 +43,8 @@ const takeaways: Record<TabName, string> = {
   kessler: content.tabs.kessler.takeaway,
 };
 
+installErrorReporter();
+
 const title = document.getElementById('site-title');
 if (title) title.textContent = content.siteTitle;
 
@@ -59,16 +62,46 @@ const takeawayEl: HTMLElement = takeaway;
 const toastEl: HTMLElement = toast;
 const tabbarEl: HTMLElement = tabbar;
 
-mountRenderer(canvasHost);
-mountPerfHud();
-mountPresenter();
+try {
+  mountRenderer(canvasHost);
+} catch (err) {
+  reportError('renderer', err);
+}
+try {
+  mountPerfHud();
+} catch (err) {
+  reportError('perf', err);
+}
+try {
+  mountPresenter();
+} catch (err) {
+  reportError('presenter', err);
+}
 const sheet = createSheet();
 
 const summary = (text: string) => sheet.setSummary(text);
+function emptyTab(): Tab {
+  return {
+    hud: el('div'),
+    controls: el('div'),
+    show() {},
+    hide() {},
+    reset() {},
+    readParams() {},
+  };
+}
+function loadTab(name: string, create: () => Tab): Tab {
+  try {
+    return create();
+  } catch (err) {
+    reportError(name, err);
+    return emptyTab();
+  }
+}
 const tabs: Record<TabName, Tab> = {
-  radiator: createRadiatorTab(summary),
-  thermal: createThermalTab(summary),
-  kessler: createKesslerTab(summary),
+  radiator: loadTab('radiator', () => createRadiatorTab(summary)),
+  thermal: loadTab('thermal', () => createThermalTab(summary)),
+  kessler: loadTab('kessler', () => createKesslerTab(summary)),
 };
 
 const buttons = new Map<TabName, HTMLButtonElement>();
@@ -228,7 +261,9 @@ window.addEventListener('keydown', (event) => {
 window.addEventListener('hashchange', route);
 
 if (import.meta.env.PROD) {
-  void import('virtual:pwa-register').then(({ registerSW }) => registerSW({ immediate: true }));
+  void import('virtual:pwa-register')
+    .then(({ registerSW }) => registerSW({ immediate: true }))
+    .catch((err: unknown) => reportError('service-worker', err));
 }
 
 route();

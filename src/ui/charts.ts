@@ -239,18 +239,27 @@ export function createChart(host: HTMLElement, aspect = 1.7): { draw: (spec: Cha
     if (spec.xLabel) place(spec.xLabel, left, height - 14, token('--text-dim'));
     if (spec.yLabel) place(spec.yLabel, left, 2, token('--text-dim'));
   };
-  const observer = new ResizeObserver(() => {
-    if (!host.isConnected) return;
-    drawNow();
-  });
-  observer.observe(host);
+  let observer: ResizeObserver | null = null;
+  if (typeof ResizeObserver === 'function') {
+    try {
+      observer = new ResizeObserver(() => {
+        requestAnimationFrame(() => {
+          if (!host.isConnected) return;
+          drawNow();
+        });
+      });
+      observer.observe(host);
+    } catch {
+      observer = null;
+    }
+  }
   return {
     draw(next) {
       spec = next;
       drawNow();
     },
     destroy() {
-      observer.disconnect();
+      observer?.disconnect();
     },
   };
 }
