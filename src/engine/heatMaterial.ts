@@ -207,32 +207,42 @@ vec3 solar = srgbToLin(vec3(22.0, 48.0, 110.0)/255.0);
 float cell = min(abs(fract(heatUv.x * 5.0) - 0.5), abs(fract(heatUv.y * 7.0) - 0.5));
 float grid = smoothstep(0.02, 0.07, cell);
 vec3 solarCol = solar * mix(0.62, 1.0, grid);
-diffuseColor.rgb = mix(diffuseColor.rgb, solarCol, vMix);`,
+diffuseColor.rgb = solarCol;`,
       )
       .replace(
         '#include <roughnessmap_fragment>',
         `#include <roughnessmap_fragment>
 float streak = texture2D(uNoise, heatUv * vec2(8.0, 1.0)).r;
 roughnessFactor *= mix(0.82, 1.18, streak);
-roughnessFactor = mix(roughnessFactor, 0.42, vMix);`,
+roughnessFactor = 0.42;`,
       )
-      .replace('#include <metalnessmap_fragment>', '#include <metalnessmap_fragment>\nmetalnessFactor = mix(metalnessFactor, 0.12, vMix);')
+      .replace('#include <metalnessmap_fragment>', '#include <metalnessmap_fragment>\nmetalnessFactor = 0.12;')
       .replace(
         '#include <emissivemap_fragment>',
         `#include <emissivemap_fragment>
-totalEmissiveRadiance += ember * (0.15 + 1.6 * k);
-totalEmissiveRadiance = mix(totalEmissiveRadiance, solarCol * 0.25, vMix);`,
+totalEmissiveRadiance = solarCol * 0.25;`,
+      )
+      .replace(
+        '#include <opaque_fragment>',
+        `#include <opaque_fragment>
+gl_FragColor.a *= vMix;`,
       );
   };
+  mat.transparent = true;
+  mat.depthWrite = false;
   return mat;
 }
 
-export function createHeatMaterial(
-  heat01 = 0,
-  tiles = false,
-  noise: { offset: [number, number]; rotation: number; scale?: number } = { offset: [0, 0], rotation: 0 },
+export function createEmberMaterial(
+  options: {
+    instanced?: boolean;
+    heat01?: number;
+    noise?: { offset: [number, number]; rotation: number; scale?: number };
+  } = {},
 ): HeatMaterial {
-  if (tiles) return createTileMaterial(heat01);
+  const instanced = options.instanced === true;
+  const heat01 = options.heat01 ?? 0;
+  const noise = options.noise ?? { offset: [0, 0] as [number, number], rotation: 0 };
   const heat = { value: heat01 };
   const noiseOffset = { value: new Vector2(noise.offset[0], noise.offset[1]) };
   const noiseRotation = { value: noise.rotation };
@@ -250,7 +260,11 @@ export function createHeatMaterial(
   const side = { value: 1 };
   mat.userData.time = time;
   mat.userData.side = side;
-  mat.customProgramCacheKey = () => 'heat-face-v6';
+  mat.customProgramCacheKey = () => (instanced ? 'ember-instanced-v1' : 'heat-face-v6');
+  if (instanced) {
+    mat.transparent = true;
+    mat.depthWrite = false;
+  }
   mat.onBeforeCompile = (shader: WebGLProgramParametersWithUniforms) => {
     shader.uniforms.uHeat = heat;
     shader.uniforms.uNoise = { value: getEmberNoise() };
@@ -264,15 +278,9 @@ export function createHeatMaterial(
       .replace(
         '#include <common>',
         `#include <common>\n${
-          tiles
-            ? `attribute float aBirth;
-attribute float aDeath;
-attribute float aSeed;
-attribute float aKind;
-attribute float aKindFrom;
-attribute float aKindT0;
-uniform float uTime;
-uniform float uSide;
+          instanced
+            ? `attribute float aScale;
+attribute float aMix;
 varying float vMix;
 varying float vSeed;`
             : ''
@@ -280,13 +288,10 @@ varying float vSeed;`
       )
       .replace(
         '#include <begin_vertex>',
-        tiles
-          ? `float popIn = smoothstep(0.0, 0.25, uTime - aBirth);
-float pop = aDeath < 0.0 ? popIn : popIn * (1.0 - smoothstep(0.0, 0.25, uTime - aDeath));
-vec3 transformed = position * max(pop, 0.0) * uSide;
-float kt = aKindT0 < 0.0 ? 1.0 : clamp((uTime - aKindT0) / 0.3, 0.0, 1.0);
-vMix = mix(aKindFrom, aKind, kt);
-vSeed = aSeed;`
+        instanced
+          ? `vec3 transformed = vec3(position) * aScale;
+vMix = aMix;
+vSeed = fract(sin(float(gl_InstanceID + 1) * 12.9898) * 43758.5453);`
           : '#include <begin_vertex>',
       );
     shader.fragmentShader = shader.fragmentShader
@@ -300,7 +305,7 @@ uniform float uNoiseRotation;
 uniform float uNoiseScale;
 uniform float uBloomOnly;
 vec3 emberOut;
-${tiles ? 'varying float vMix;\nvarying float vSeed;' : ''}
+${instanced ? 'varying float vMix;\nvarying float vSeed;' : ''}
 ${HEAT_GLSL}`,
       )
       .replace(
@@ -311,10 +316,11 @@ float rot = uNoiseRotation;
 vec2 off = uNoiseOffset;
 float scl = uNoiseScale;
 ${
-  tiles
-    ? `rot = fract(vSeed * 17.13) * 6.2831853;
-off = vec2(fract(vSeed * 3.17), fract(vSeed * 9.71));
-scl = 0.7 + 0.7 * fract(vSeed * 5.31);`
+  instanced
+    ? `float seed = vSeed;
+rot = fract(seed * 17.13) * 6.2831853;
+off = vec2(fract(seed * 3.17), fract(seed * 9.71));
+scl = 0.7 + 0.7 * fract(seed * 5.31);`
     : ''
 }
 float cs = cos(rot);
@@ -328,42 +334,42 @@ float field = 0.6 * nR + 0.25 * nG + 0.15 * (1.0 - edge);
 float cover = smoothstep(1.0 - uHeat * 1.1 - 0.25, 1.0 - uHeat * 1.1 + 0.25, field);
 float inten = cover * uHeat * (0.75 + 0.5 * nG);
 vec3 ember = emberRamp(inten);
-diffuseColor.rgb *= (1.0 - 0.6 * cover);
-${
-  tiles
-    ? `vec3 solar = srgbToLin(vec3(22.0, 48.0, 110.0)/255.0);
-float cell = min(abs(fract(mapUv.x * 5.0) - 0.5), abs(fract(mapUv.y * 7.0) - 0.5));
-float grid = smoothstep(0.02, 0.07, cell);
-vec3 solarCol = solar * mix(0.62, 1.0, grid);
-diffuseColor.rgb = mix(diffuseColor.rgb, solarCol, vMix);`
-    : ''
-}`,
+diffuseColor.rgb *= (1.0 - 0.6 * cover);`,
       )
       .replace(
         '#include <roughnessmap_fragment>',
         `#include <roughnessmap_fragment>
 float streak = texture2D(uNoise, heatUv * vec2(8.0, 1.0)).r;
-roughnessFactor *= mix(0.82, 1.18, streak);
-${tiles ? 'roughnessFactor = mix(roughnessFactor, 0.42, vMix);' : ''}`,
+roughnessFactor *= mix(0.82, 1.18, streak);`,
       )
       .replace(
         '#include <metalnessmap_fragment>',
-        `#include <metalnessmap_fragment>
-${tiles ? 'metalnessFactor = mix(metalnessFactor, 0.12, vMix);' : ''}`,
+        '#include <metalnessmap_fragment>',
       )
       .replace(
         '#include <emissivemap_fragment>',
         `#include <emissivemap_fragment>
 emberOut = ember * (0.2 + 3.0 * pow(max(inten, 0.0), 1.4));
-${tiles ? 'emberOut *= (1.0 - vMix);\ntotalEmissiveRadiance += emberOut;\ntotalEmissiveRadiance += solarCol * 0.25 * vMix;' : 'totalEmissiveRadiance += emberOut;'}`,
+${instanced ? 'emberOut *= 1.0 - vMix;' : ''}
+totalEmissiveRadiance += emberOut;`,
       )
       .replace(
         '#include <dithering_fragment>',
         `#include <dithering_fragment>
-if (uBloomOnly > 0.5) gl_FragColor = vec4(emberOut, 1.0);`,
+if (uBloomOnly > 0.5) gl_FragColor = vec4(emberOut, 1.0);
+${instanced ? 'else gl_FragColor.a *= 1.0 - vMix;' : ''}`,
       );
   };
   return mat;
+}
+
+export function createHeatMaterial(
+  heat01 = 0,
+  tiles = false,
+  noise: { offset: [number, number]; rotation: number; scale?: number } = { offset: [0, 0], rotation: 0 },
+): HeatMaterial {
+  if (tiles) return createTileMaterial(heat01);
+  return createEmberMaterial({ heat01, noise });
 }
 
 export function setHeat(mat: HeatMaterial, heat01: number): void {

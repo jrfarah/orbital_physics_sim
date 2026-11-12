@@ -15,7 +15,8 @@ import {
   Scene,
   Vector3,
 } from 'three';
-import { createHeatMaterial, setHeat, type HeatMaterial } from '../../engine/heatMaterial';
+import { createEmberMaterial, createHeatMaterial, setHeat, type HeatMaterial } from '../../engine/heatMaterial';
+import { LAYER_EMBER } from '../../engine/post';
 import {
   clearUserOrbit,
   createControls,
@@ -38,9 +39,13 @@ export interface ThermalLayout {
 
 interface Slot {
   mesh: InstancedMesh;
+  solar: InstancedMesh;
   mat: HeatMaterial;
+  solarMat: HeatMaterial;
   scale: InstancedBufferAttribute;
+  solarScale: InstancedBufferAttribute;
   mix: InstancedBufferAttribute;
+  solarMix: InstancedBufferAttribute;
   k: number;
   area: number;
   side: number;
@@ -85,7 +90,8 @@ export function createThermalScene(overlay: HTMLElement) {
   scene.add(hex);
 
   const slots = [makeSlot(), makeSlot()];
-  scene.add(slots[0].mesh, slots[1].mesh);
+  scene.add(slots[0].mesh, slots[0].solar, slots[1].mesh, slots[1].solar);
+  let emberHeat = 0;
   let shown = 0;
   let outer = 4;
   let fade: { from: number; to: number; t0: number } | null = null;
@@ -130,7 +136,8 @@ export function createThermalScene(overlay: HTMLElement) {
     const area = Math.max(next.aTot, 1);
     const k = pickK(area, slots[shown].k);
     const slot = ensureLevel(k);
-    const heat = Math.min(1, Math.max(0, (next.tHot - 210) / 360));
+    const heat = Math.min(1, Math.max(0, (next.tHot - 1) / 649));
+    emberHeat = heat;
     setHeat(slots[0].mat, heat);
     setHeat(slots[1].mat, heat);
     fill(slot, next.aRad, area);
@@ -161,20 +168,29 @@ export function createThermalScene(overlay: HTMLElement) {
     back.die.fill(0);
     if (reducedMotion() || front.count === 0) {
       front.mesh.count = 0;
+      front.solar.count = 0;
       shown = next;
       back.mat.opacity = 1;
-      back.mat.transparent = false;
-      back.mat.depthWrite = true;
+      back.solarMat.opacity = 1;
+      back.mat.transparent = true;
+      back.solarMat.transparent = true;
+      back.mat.depthWrite = false;
+      back.solarMat.depthWrite = false;
       fade = null;
       return back;
     }
     fade = { from: shown, to: next, t0: performance.now() };
     shown = next;
     back.mat.opacity = 0;
+    back.solarMat.opacity = 0;
     back.mat.transparent = true;
+    back.solarMat.transparent = true;
     back.mat.depthWrite = false;
+    back.solarMat.depthWrite = false;
     back.mesh.renderOrder = 2;
+    back.solar.renderOrder = 3;
     front.mesh.renderOrder = 1;
+    front.solar.renderOrder = 1;
     return back;
   }
 
@@ -203,7 +219,9 @@ export function createThermalScene(overlay: HTMLElement) {
     }
     slot.count = total;
     slot.mesh.count = drawn;
+    slot.solar.count = drawn;
     slot.mesh.instanceMatrix.needsUpdate = true;
+    slot.solar.instanceMatrix.needsUpdate = true;
     outer = slot.c * Math.sqrt(Math.max(total - 1, 0) + 0.5) + slot.side;
   }
 
@@ -215,6 +233,7 @@ export function createThermalScene(overlay: HTMLElement) {
     dummy.scale.set(1, 1, 1);
     dummy.updateMatrix();
     slot.mesh.setMatrixAt(index, dummy.matrix);
+    slot.solar.setMatrixAt(index, dummy.matrix);
   }
 
   function pop(slot: Slot, index: number, now: number): number {
@@ -237,6 +256,7 @@ export function createThermalScene(overlay: HTMLElement) {
     for (let i = 0; i < slot.mesh.count; i++) {
       const size = pop(slot, i, now);
       slot.scale.setX(i, size);
+      slot.solarScale.setX(i, size);
       const target = slot.mixTo[i] ?? 1;
       const current = slot.mixNow[i] ?? target;
       if (Math.abs(current - target) > 0.004) {
@@ -244,6 +264,7 @@ export function createThermalScene(overlay: HTMLElement) {
         live = true;
       }
       slot.mix.setX(i, slot.mixNow[i] ?? target);
+      slot.solarMix.setX(i, slot.mixNow[i] ?? target);
       if (size > 0.001) drawn = i + 1;
       if (slot.die[i]! > 0) {
         if (now - slot.die[i]! < 280) live = true;
@@ -252,8 +273,14 @@ export function createThermalScene(overlay: HTMLElement) {
       }
     }
     slot.scale.needsUpdate = true;
+    slot.solarScale.needsUpdate = true;
     slot.mix.needsUpdate = true;
-    if (drawn < slot.mesh.count) slot.mesh.count = Math.max(drawn, slot.count);
+    slot.solarMix.needsUpdate = true;
+    if (drawn < slot.mesh.count) {
+      const next = Math.max(drawn, slot.count);
+      slot.mesh.count = next;
+      slot.solar.count = next;
+    }
     return live;
   }
 
@@ -319,7 +346,7 @@ export function createThermalScene(overlay: HTMLElement) {
         return controls;
       },
       update(dt) {
-        setEmberGlare(0);
+        setEmberGlare(emberHeat > 0.02 ? 0.35 + 1.4 * emberHeat : 0);
         const now = performance.now();
         let live = tickSlot(slots[shown]!, now, dt);
         if (fade) {
@@ -328,16 +355,19 @@ export function createThermalScene(overlay: HTMLElement) {
           const t = Math.min(1, (now - fade.t0) / 400);
           const e = reducedMotion() ? 1 : smooth(t);
           slots[fade.to]!.mat.opacity = e;
+          slots[fade.to]!.solarMat.opacity = e;
           other.mat.opacity = 1 - e;
+          other.solarMat.opacity = 1 - e;
           other.mat.transparent = true;
+          other.solarMat.transparent = true;
           if (t >= 1) {
             other.mesh.count = 0;
+            other.solar.count = 0;
             other.mat.opacity = 1;
-            other.mat.transparent = false;
+            other.solarMat.opacity = 1;
             const front = slots[fade.to]!;
             front.mat.opacity = 1;
-            front.mat.transparent = false;
-            front.mat.depthWrite = true;
+            front.solarMat.opacity = 1;
             fade = null;
           }
           live = true;
@@ -415,18 +445,37 @@ function makeSlot(): Slot {
   const mix = new InstancedBufferAttribute(new Float32Array(MAX), 1);
   geo.setAttribute('aScale', scale);
   geo.setAttribute('aMix', mix);
-  const mat = createHeatMaterial(0.2, true);
+  const solarGeo = geo.clone();
+  const solarScale = new InstancedBufferAttribute(new Float32Array(MAX), 1);
+  const solarMix = new InstancedBufferAttribute(new Float32Array(MAX), 1);
+  solarGeo.setAttribute('aScale', solarScale);
+  solarGeo.setAttribute('aMix', solarMix);
+  const mat = createEmberMaterial({ instanced: true, heat01: 0.51 });
+  const solarMat = createHeatMaterial(0, true);
   mat.envMap = null;
   mat.envMapIntensity = 0;
+  solarMat.envMap = null;
+  solarMat.envMapIntensity = 0;
   const mesh = new InstancedMesh(geo, mat, MAX);
+  const solar = new InstancedMesh(solarGeo, solarMat, MAX);
+  mesh.layers.enable(LAYER_EMBER);
   mesh.count = 0;
+  solar.count = 0;
   mesh.frustumCulled = false;
+  solar.frustumCulled = false;
   mesh.instanceMatrix.setUsage(DynamicDrawUsage);
+  solar.instanceMatrix.setUsage(DynamicDrawUsage);
+  mesh.renderOrder = 2;
+  solar.renderOrder = 3;
   return {
     mesh,
+    solar,
     mat,
+    solarMat,
     scale,
+    solarScale,
     mix,
+    solarMix,
     k: -1,
     area: 5,
     side: Math.sqrt(5) * 0.92,

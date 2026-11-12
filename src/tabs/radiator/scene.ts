@@ -28,7 +28,7 @@ import { R_E } from '../../physics/constants';
 import type { FaceFlux, RadiatorResult } from '../../physics/radiator';
 import type { Vec3 } from '../../physics/vec';
 import { createEarth } from '../../engine/earth';
-import { createHeatMaterial, setHeat, type HeatMaterial } from '../../engine/heatMaterial';
+import { createEmberMaterial, setHeat, type HeatMaterial } from '../../engine/heatMaterial';
 import { LAYER_EMBER } from '../../engine/post';
 import { clearUserOrbit, createControls, getStageSize, makeCamera, reducedMotion, requestRender, setEmberGlare, userHasOrbited, type TabView } from '../../engine/renderer';
 import { createStarfield, createSunSprite } from '../../engine/starfield';
@@ -82,8 +82,8 @@ export function createRadiatorScene(mobile: boolean, tag: HTMLElement) {
   scene.add(earth.sun);
   scene.add(earth.ambient);
 
-  const matA = createHeatMaterial(0, false, { offset: [0.13, 0.71], rotation: 0.6, scale: 0.9 });
-  const matB = createHeatMaterial(0, false, { offset: [0.58, 0.22], rotation: 2.1, scale: 1.3 });
+  const matA = createEmberMaterial({ heat01: 0, noise: { offset: [0.13, 0.71], rotation: 0.6, scale: 0.9 } });
+  const matB = createEmberMaterial({ heat01: 0, noise: { offset: [0.58, 0.22], rotation: 2.1, scale: 1.3 } });
   const edge = new MeshStandardMaterial({ color: 0x2a2e34, metalness: 0.85, roughness: 0.45, envMap: null, envMapIntensity: 0 });
   const panel = new Mesh(new BoxGeometry(0.14, 0.09, 0.006), [edge, edge, edge, edge, matA, matB]);
   const outline = new LineSegments(
