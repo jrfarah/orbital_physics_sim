@@ -1,4 +1,5 @@
 import {
+  AdditiveBlending,
   BufferAttribute,
   BufferGeometry,
   Color,
@@ -19,6 +20,8 @@ import { createEarth } from '../../engine/earth';
 import { clearUserOrbit, createControls, isMobile, makeCamera, reducedMotion, requestRender, type TabView } from '../../engine/renderer';
 import { createStarfield, createSunSprite } from '../../engine/starfield';
 import { r0Style } from './gauges';
+import { orbitPosition } from './orbit';
+import { el } from '../../ui/readout';
 
 const MU = 398600.4418;
 const R500 = R_E + 500;
@@ -29,13 +32,17 @@ const MAX_DEBRIS = 1500;
 
 const ORBIT = /* glsl */ `
 vec3 orbitPos(float radius, float incl, float raan, float phase0, float omega, float time) {
-  float phase = phase0 + omega * time;
-  float cp = cos(phase);
-  float sp = sin(phase);
-  vec3 inc = vec3(radius * cp, radius * sp * cos(incl), radius * sp * sin(incl));
+  float u = phase0 + omega * time;
+  float cu = cos(u);
+  float su = sin(u);
   float cO = cos(raan);
   float sO = sin(raan);
-  return vec3(inc.x * cO - inc.y * sO, inc.x * sO + inc.y * cO, inc.z);
+  float ci = cos(incl);
+  float si = sin(incl);
+  float X = radius * (cO * cu - sO * su * ci);
+  float Y = radius * (sO * cu + cO * su * ci);
+  float Z = radius * (su * si);
+  return vec3(X, Z, -Y);
 }
 `;
 
@@ -85,7 +92,7 @@ export function createKesslerScene(tip: HTMLElement) {
   satGeo.setAttribute('aOmega', new BufferAttribute(satOmega, 1));
   satGeo.setAttribute('aColor', new BufferAttribute(satColor, 3));
   const satMat = new ShaderMaterial({
-    uniforms: { uTime: { value: 0 } },
+    uniforms: { uTime: { value: 0 }, uPointSize: { value: 2 } },
     vertexShader: /* glsl */ `
       attribute float aRadius;
       attribute float aIncl;
@@ -94,13 +101,14 @@ export function createKesslerScene(tip: HTMLElement) {
       attribute float aOmega;
       attribute vec3 aColor;
       uniform float uTime;
+      uniform float uPointSize;
       varying vec3 vColor;
       ${ORBIT}
       void main() {
         vColor = aColor;
         vec3 world = orbitPos(aRadius, aIncl, aRaan, aPhase0, aOmega, uTime);
         gl_Position = projectionMatrix * modelViewMatrix * vec4(world, 1.0);
-        gl_PointSize = 2.0;
+        gl_PointSize = uPointSize;
       }
     `,
     fragmentShader: /* glsl */ `
@@ -158,6 +166,76 @@ export function createKesslerScene(tip: HTMLElement) {
   debris.renderOrder = 1;
   scene.add(debris);
 
+  const POOL = 512;
+  const flashPos = new Float32Array(POOL * 3);
+  const flashAge = new Float32Array(POOL);
+  const flashKind = new Float32Array(POOL);
+  const flashLife = new Float32Array(POOL);
+  const flashVel = new Float32Array(POOL * 3);
+  const flashGeo = new BufferGeometry();
+  flashGeo.setAttribute('position', new BufferAttribute(flashPos, 3));
+  flashGeo.setAttribute('aAge', new BufferAttribute(flashAge, 1));
+  flashGeo.setAttribute('aKind', new BufferAttribute(flashKind, 1));
+  flashGeo.setAttribute('aLife', new BufferAttribute(flashLife, 1));
+  const flashMat = new ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    blending: AdditiveBlending,
+    uniforms: {},
+    vertexShader: /* glsl */ `
+      attribute float aAge;
+      attribute float aKind;
+      attribute float aLife;
+      varying float vAge;
+      varying float vKind;
+      varying float vLife;
+      void main() {
+        vAge = aAge;
+        vKind = aKind;
+        vLife = aLife;
+        vec4 mv = modelViewMatrix * vec4(position, 1.0);
+        gl_Position = projectionMatrix * mv;
+        float px = aKind < 0.5 ? 10.0 : aKind < 1.5 ? 16.0 : 3.0;
+        gl_PointSize = aLife <= 0.0 ? 0.0 : px;
+      }
+    `,
+    fragmentShader: /* glsl */ `
+      varying float vAge;
+      varying float vKind;
+      varying float vLife;
+      void main() {
+        if (vLife <= 0.0 || vAge >= vLife) discard;
+        vec2 d = gl_PointCoord - 0.5;
+        float r = length(d);
+        if (r > 0.5) discard;
+        float alpha = 0.0;
+        if (vKind < 0.5) {
+          float rise = smoothstep(0.0, 0.03, vAge);
+          alpha = rise * exp(-max(vAge - 0.03, 0.0) / 0.07);
+        } else if (vKind < 1.5) {
+          if (vAge < 0.04) alpha = 1.0;
+          else if (vAge < 0.08) alpha = 0.3;
+          else if (vAge < 0.12) alpha = 1.0;
+          else alpha = exp(-(vAge - 0.12) / 0.18);
+        } else {
+          alpha = 1.0 - vAge / vLife;
+        }
+        vec3 halo = vec3(0.749, 0.890, 1.0);
+        vec3 core = vec3(1.0);
+        vec3 color = mix(halo, core, smoothstep(0.5, 0.05, r));
+        gl_FragColor = vec4(color * alpha, alpha);
+      }
+    `,
+  });
+  const flashes = new Points(flashGeo, flashMat);
+  flashes.frustumCulled = false;
+  flashes.renderOrder = 4;
+  scene.add(flashes);
+  let flashCursor = 0;
+  const flashRng = mulberry32(0xa11);
+  const scratch = new Vector3();
+  const tangent = new Vector3();
+
   const camera = makeCamera();
   camera.position.set(3.4, 1.8, 3.6);
   let controls = createControls(camera, { min: 1.3, max: 12 });
@@ -171,6 +249,32 @@ export function createKesslerScene(tip: HTMLElement) {
   let lastRows: ShellRow[] = [];
   let sig = '';
   let instances = 0;
+  let ranges: { start: number; count: number; h: number }[] = [];
+  const killRate = new Map<number, number>();
+  const collRate = new Map<number, number>();
+  let dayScale = 7;
+  let simDays = 0;
+  let lost = 0;
+  let saturated = false;
+  const clock = el('div', 'sim-clock');
+  const clockTime = el('div', '', 'Simulated time: 0 yr 0 d');
+  const clockLost = el('div', '', 'Satellites lost (simulated): 0');
+  const clockNote = el('div', 'caption', 'Flashes are illustrative; their rate follows the model.');
+  const clockSat = el('div', 'caption', 'Losses faster than can be drawn');
+  clockSat.hidden = true;
+  const scales = el('div', 'chip-grid');
+  for (const [label, days] of [['1 day', 1], ['1 week', 7], ['1 month', 365.25 / 12]] as const) {
+    const button = el('button', 'btn', `1 s = ${label}`);
+    button.type = 'button';
+    if (days === 7) button.classList.add('accent');
+    button.addEventListener('click', () => {
+      dayScale = days;
+      for (const node of scales.querySelectorAll('button')) node.classList.remove('accent');
+      button.classList.add('accent');
+    });
+    scales.append(button);
+  }
+  clock.append(clockTime, scales, clockLost, clockNote, clockSat);
   const rayOrigin = new Vector3();
   const rayDir = new Vector3();
 
@@ -272,9 +376,11 @@ export function createKesslerScene(tip: HTMLElement) {
     const incs = [53, 70, 97.6, 30].map((d) => (d * Math.PI) / 180);
     const weightsInc = [0.35, 0.15, 0.35, 0.15];
     let cursor = 0;
+    ranges = [];
     rows.forEach((row, index) => {
       const count = Math.min(MAX_SATS - cursor, counts[index] ?? 0);
       shells[index].mesh.userData.count = count;
+      ranges.push({ start: cursor, count, h: row.h });
       const style = r0Style(row.R0);
       for (let i = 0; i < count; i++) {
         const n = cursor + i;
@@ -339,7 +445,98 @@ export function createKesslerScene(tip: HTMLElement) {
     debris.visible = showDebris;
   }
 
-  function apply(rows: ShellRow[]): number {
+  function dotPx(area: number): number {
+    return Math.min(6, Math.max(1.4, 1.6 + 1.2 * Math.log10(Math.max(area, 1) / 100)));
+  }
+
+  function spawnFlash(x: number, y: number, z: number, kind: number, life: number, vx = 0, vy = 0, vz = 0): void {
+    const i = flashCursor % POOL;
+    flashCursor += 1;
+    flashPos[i * 3] = x;
+    flashPos[i * 3 + 1] = y;
+    flashPos[i * 3 + 2] = z;
+    flashAge[i] = 0;
+    flashKind[i] = kind;
+    flashLife[i] = life;
+    flashVel[i * 3] = vx;
+    flashVel[i * 3 + 1] = vy;
+    flashVel[i * 3 + 2] = vz;
+  }
+
+  function paintClock(): void {
+    const years = Math.floor(simDays / 365.25);
+    const days = Math.floor(simDays - years * 365.25);
+    clockTime.textContent = `Simulated time: ${years} yr ${days} d`;
+    clockLost.textContent = `Satellites lost (simulated): ${lost.toLocaleString('en-US')}`;
+    clockSat.hidden = !saturated;
+  }
+
+  function stepFlashes(dt: number): void {
+    const dtYears = (dt * dayScale) / 365.25;
+    simDays += dt * dayScale;
+    let spawned = 0;
+    let stop = false;
+    saturated = false;
+    for (const range of ranges) {
+      if (stop || range.count <= 0) continue;
+      const kills = (killRate.get(range.h) ?? 0) * dtYears;
+      const colls = (collRate.get(range.h) ?? 0) * dtYears;
+      const nKill = poisson(kills, flashRng);
+      const nColl = poisson(colls, flashRng);
+      lost += nKill + nColl;
+      for (let n = 0; n < nKill + nColl; n++) {
+        if (spawned >= 40) {
+          saturated = true;
+          stop = true;
+          break;
+        }
+        const index = range.start + Math.floor(flashRng() * range.count);
+        const u = satPhase[index] + satOmega[index] * time;
+        orbitPosition(satRadius[index], satIncl[index], satRaan[index], u, scratch);
+        const collision = n >= nKill;
+        spawnFlash(scratch.x, scratch.y, scratch.z, collision ? 1 : 0, collision ? 0.62 : 0.26);
+        if (collision) {
+          const speed = 0.015;
+          for (let s = 0; s < 8; s++) {
+            tangent.set(flashRng() - 0.5, flashRng() - 0.5, flashRng() - 0.5);
+            if (tangent.lengthSq() < 1e-6) tangent.set(1, 0, 0);
+            tangent.cross(scratch).normalize().multiplyScalar(speed * (0.6 + flashRng()));
+            spawnFlash(scratch.x, scratch.y, scratch.z, 2, 1.2, tangent.x, tangent.y, tangent.z);
+          }
+        }
+        spawned += 1;
+      }
+    }
+    for (let i = 0; i < POOL; i++) {
+      if (flashLife[i] <= 0) continue;
+      flashAge[i] += dt;
+      if (flashAge[i] >= flashLife[i]) {
+        flashLife[i] = 0;
+        continue;
+      }
+      if (flashKind[i] > 1.5) {
+        flashPos[i * 3] += flashVel[i * 3] * dt;
+        flashPos[i * 3 + 1] += flashVel[i * 3 + 1] * dt;
+        flashPos[i * 3 + 2] += flashVel[i * 3 + 2] * dt;
+      }
+    }
+    flashGeo.getAttribute('position').needsUpdate = true;
+    flashGeo.getAttribute('aAge').needsUpdate = true;
+    flashGeo.getAttribute('aKind').needsUpdate = true;
+    flashGeo.getAttribute('aLife').needsUpdate = true;
+    paintClock();
+  }
+
+  function apply(rows: ShellRow[], dynamics?: { area: number; kills: number[]; coll: number[] }): number {
+    if (dynamics) {
+      killRate.clear();
+      collRate.clear();
+      H_C.forEach((h, index) => {
+        killRate.set(h, dynamics.kills[index] ?? 0);
+        collRate.set(h, dynamics.coll[index] ?? 0);
+      });
+      satMat.uniforms.uPointSize.value = dotPx(dynamics.area);
+    }
     lastRows = rows;
     const next = `${budget()}|${rows.map((row) => `${row.h}:${row.N.toExponential(4)}`).join(',')}`;
     if (next !== sig) {
@@ -401,12 +598,14 @@ export function createKesslerScene(tip: HTMLElement) {
     const canvas = dom();
     canvas.addEventListener('pointermove', onMove);
     canvas.addEventListener('pointerleave', hideTip);
+    canvas.parentElement?.append(clock);
   }
   function unbind(): void {
     const canvas = dom();
     canvas.removeEventListener('pointermove', onMove);
     canvas.removeEventListener('pointerleave', hideTip);
     hideTip();
+    clock.remove();
   }
 
   function view(): TabView {
@@ -424,6 +623,7 @@ export function createKesslerScene(tip: HTMLElement) {
         let worst: (typeof shells)[number] | null = null;
         for (const shell of shells) if (!worst || shell.row.R0 > worst.row.R0) worst = shell;
         for (const shell of shells) shell.mat.uniforms.uPulse.value = shell === worst ? pulse : 1;
+        stepFlashes(dt);
         return true;
       },
       resetView() {
@@ -459,6 +659,14 @@ export function createKesslerScene(tip: HTMLElement) {
       debris.visible = on;
       requestRender();
     },
+    resetSim() {
+      simDays = 0;
+      lost = 0;
+      saturated = false;
+      flashLife.fill(0);
+      paintClock();
+      requestRender();
+    },
     rebind() {
       controls.dispose();
       const target = controls.target.clone();
@@ -472,4 +680,17 @@ export function createKesslerScene(tip: HTMLElement) {
       controls.dispose();
     },
   };
+}
+
+function poisson(mean: number, rng: () => number): number {
+  if (!(mean > 0)) return 0;
+  if (mean > 40) return Math.max(0, Math.round(mean));
+  const limit = Math.exp(-mean);
+  let k = 0;
+  let p = 1;
+  do {
+    k += 1;
+    p *= rng();
+  } while (p > limit && k < 80);
+  return k - 1;
 }

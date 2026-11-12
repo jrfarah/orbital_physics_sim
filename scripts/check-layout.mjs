@@ -40,6 +40,11 @@ try {
       await page.goto(`http://127.0.0.1:${port}/#/${tab}`, { waitUntil: 'domcontentloaded' });
       await page.waitForSelector('#canvas-host canvas');
       await page.waitForTimeout(500);
+      if (tab === 'kessler' && width === 1440 && height === 900) {
+        const more = page.getByRole('button', { name: 'More detail' });
+        if ((await more.count()) && (await more.first().innerText()).includes('▸')) await more.first().click();
+        await page.waitForTimeout(200);
+      }
       const shot = new URL(`../shots/${tab}-${width}x${height}.png`, import.meta.url);
       await page.screenshot({ path: fileURLToPath(shot), fullPage: true });
       offenders.push(...(await audit(page)).map((item) => `${tab} ${width}x${height}: ${item}`));

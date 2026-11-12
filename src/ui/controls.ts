@@ -104,14 +104,16 @@ export function createSlider(opts: {
   };
   const paintMarks = () => {
     markRow.replaceChildren();
-    const tick = marks.find((mark) => mark.label === '' && mark.value >= min && mark.value <= max);
-    if (!tick) {
+    const ticks = marks.filter((mark) => mark.label === '' && mark.value >= min && mark.value <= max);
+    if (!ticks.length) {
       markRow.hidden = true;
       return;
     }
-    const node = el('div', 'mark-tick');
-    node.style.left = `${toT(tick.value) * 100}%`;
-    markRow.append(node);
+    for (const tick of ticks) {
+      const node = el('div', 'mark-tick');
+      node.style.left = `${toT(tick.value) * 100}%`;
+      markRow.append(node);
+    }
     markRow.hidden = false;
   };
   paint();

@@ -55,47 +55,70 @@ export function createLifetimeGauge(): { element: HTMLElement; set: (tau: number
   const element = el('div');
   element.append(el('div', 'field-label', 'Debris lifetime'));
   const svg = document.createElementNS(NS, 'svg');
-  svg.setAttribute('viewBox', '0 0 320 168');
+  svg.setAttribute('viewBox', '0 0 220 130');
   svg.setAttribute('width', '100%');
-  const cx = 160;
-  const cy = 132;
-  const radius = 86;
-  const arc = document.createElementNS(NS, 'path');
-  arc.setAttribute('d', `M ${cx - radius} ${cy} A ${radius} ${radius} 0 0 0 ${cx + radius} ${cy}`);
-  arc.setAttribute('fill', 'none');
-  arc.setAttribute('stroke', '#5ce1ff');
-  arc.setAttribute('stroke-width', '5');
-  arc.setAttribute('stroke-linecap', 'round');
-  svg.append(arc);
-  const labels = ['1 yr', '10 yr', '100 yr', '1,000 yr', '10,000+ yr'];
-  labels.forEach((name, index) => {
-    const ang = ((180 - index * 45) * Math.PI) / 180;
-    const x = cx + Math.cos(ang) * (radius + 18);
-    const y = cy - Math.sin(ang) * (radius + 18);
+  const cx = 110;
+  const cy = 115;
+  const radius = 90;
+  const point = (deg: number, r = radius) => {
+    const rad = (deg * Math.PI) / 180;
+    return [cx + r * Math.cos(rad), cy - r * Math.sin(rad)] as const;
+  };
+  const segments: [number, number, string][] = [
+    [180, 135, '#3ddc97'],
+    [135, 90, '#ffd84d'],
+    [90, 45, '#ff8a3d'],
+    [45, 0, '#ff4d4d'],
+  ];
+  for (const [start, end, color] of segments) {
+    const [x0, y0] = point(start);
+    const [x1, y1] = point(end);
+    const arc = document.createElementNS(NS, 'path');
+    arc.setAttribute('d', `M ${x0} ${y0} A ${radius} ${radius} 0 0 1 ${x1} ${y1}`);
+    arc.setAttribute('fill', 'none');
+    arc.setAttribute('stroke', color);
+    arc.setAttribute('stroke-width', '10');
+    arc.setAttribute('stroke-linecap', 'butt');
+    svg.append(arc);
+  }
+  const labels: [string, number, string][] = [
+    ['1 yr', 180, 'start'],
+    ['10 yr', 135, 'middle'],
+    ['100 yr', 90, 'middle'],
+    ['1,000 yr', 45, 'middle'],
+    ['10,000+ yr', 0, 'end'],
+  ];
+  for (const [name, deg, anchor] of labels) {
+    const [x, y] = point(deg, radius + 16);
     const node = document.createElementNS(NS, 'text');
     node.setAttribute('x', String(x));
     node.setAttribute('y', String(y));
     node.setAttribute('fill', '#9aa9bb');
     node.setAttribute('font-size', '11');
-    node.setAttribute('text-anchor', index === 0 ? 'end' : index === 4 ? 'start' : 'middle');
+    node.setAttribute('text-anchor', anchor);
     node.setAttribute('dominant-baseline', 'middle');
     node.textContent = name;
     svg.append(node);
-  });
+  }
   const needle = document.createElementNS(NS, 'line');
   needle.setAttribute('x1', String(cx));
   needle.setAttribute('y1', String(cy));
-  needle.setAttribute('stroke', '#e6edf5');
+  needle.setAttribute('stroke', 'var(--text)');
   needle.setAttribute('stroke-width', '3');
-  needle.setAttribute('stroke-linecap', 'round');
   svg.append(needle);
+  const hub = document.createElementNS(NS, 'circle');
+  hub.setAttribute('cx', String(cx));
+  hub.setAttribute('cy', String(cy));
+  hub.setAttribute('r', '5');
+  hub.setAttribute('fill', 'var(--text)');
+  svg.append(hub);
   const readout = el('div', 'caption');
   element.append(svg, readout);
   return {
     element,
     set(tau, hKm) {
       const ang = (lifetimeAngle(tau) * Math.PI) / 180;
-      const reach = radius * 0.85;
+      const reach = radius * 0.82;
       needle.setAttribute('x2', String(cx + Math.cos(ang) * reach));
       needle.setAttribute('y2', String(cy - Math.sin(ang) * reach));
       readout.textContent = `Debris at ${Math.round(hKm)} km lasts ~${fmtDuration(tau)}`;

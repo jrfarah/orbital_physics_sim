@@ -228,6 +228,34 @@ export function powerPerSatellite(rateWPerYr: number, lYr: number, n: number): n
   return (rateWPerYr * lYr) / n;
 }
 
+/** Per-shell loss rates already computed inside `kessler`. Sums match `kills_per_yr` and `collisions_per_yr`. */
+export function kesslerShellRates(input: KesslerInput = {}): { kills: number[]; coll_total: number[] } {
+  const rate = input.rateWPerYr ?? 1e9;
+  const lYr = input.LYr ?? 5;
+  const pSatIn = input.pSat ?? SPACEX_P_SAT;
+  const preset = input.preset ?? 'spacex';
+  const band = input.band ?? [500, 1000];
+  const s = input.s ?? 0.99;
+  const fDisp = input.fDisp ?? 0.01;
+  const fVuln = input.fVuln ?? 0.1;
+  const tYr = input.tYr ?? 10;
+  const fFrag = input.fFrag ?? 112;
+  const coord = input.coord ?? 1;
+  const fleet = input.fleetOverride ?? null;
+  let N: number;
+  let A: number;
+  if (fleet) {
+    N = fleet.N;
+    A = fleet.A;
+  } else {
+    N = (rate * lYr) / pSatIn;
+    A = (SPACEX_A_SAT * pSatIn) / SPACEX_P_SAT;
+  }
+  const nI = distribution(preset, band).map((wi) => N * wi);
+  const rows = shellRates(nI, A, lYr, s, fDisp, fVuln, tYr, fFrag, coord, SIGMA_SCREEN);
+  return { kills: rows.kills, coll_total: rows.coll_total };
+}
+
 export function kessler(input: KesslerInput = {}): KesslerResult {
   const rate = input.rateWPerYr ?? 1e9;
   const lYr = input.LYr ?? 5;

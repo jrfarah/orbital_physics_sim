@@ -14,26 +14,29 @@ import {
 import { reducedMotion, setActiveView } from '../../engine/renderer';
 import {
   kessler,
-  powerPerSatellite,
-  satelliteCount,
-  STARLINK_A,
-  STARLINK_N,
+  kesslerShellRates,
   type KesslerResult,
   type Preset,
 } from '../../physics/kessler';
 import { createLifetimeGauge, r0Legend, r0Style } from './gauges';
 import { createKesslerScene } from './scene';
 
-type RateId = 'gw' | 'mid' | 'tw';
-
-const RATES: Record<RateId, number> = { gw: 1e9, mid: 5e11, tw: 1e12 };
+const STARLINK_RATE = (9000 * 116 * 150) / 5;
+const W_PER_M2 = 120000 / 800;
+const RATE_SNAPS = [
+  { label: 'Starlink today', watts: STARLINK_RATE },
+  { label: '1 GW', watts: 1e9 },
+  { label: '100 GW', watts: 1e11 },
+  { label: '500 GW', watts: 5e11 },
+  { label: '1 TW', watts: 1e12 },
+];
 const DODGE = [0, 50, 90, 95, 99, 99.5, 99.9, 99.95, 99.99, 99.999];
 const COORD = [1, 0.3, 0.1, 0.03, 0.01];
 
 interface KesslerState {
   rate: number;
+  area: number;
   L: number;
-  pSat: number;
   preset: Preset;
   band: [number, number];
   dodge: number;
@@ -44,17 +47,16 @@ interface KesslerState {
   coord: number;
   usdPerW: number;
   usdPerKg: number;
-  starlink: boolean;
   debris: boolean;
   paused: boolean;
 }
 
 function defaults(): KesslerState {
   return {
-    rate: 1e9,
+    rate: STARLINK_RATE,
+    area: 116,
     L: 5,
-    pSat: 120e3,
-    preset: 'spacex',
+    preset: 'starlink',
     band: [500, 1000],
     dodge: 99,
     dispPct: 1,
@@ -64,7 +66,6 @@ function defaults(): KesslerState {
     coord: 1,
     usdPerW: 30,
     usdPerKg: 1000,
-    starlink: false,
     debris: true,
     paused: reducedMotion(),
   };
@@ -85,10 +86,9 @@ function dodgeChip(pct: number): string {
   return `${pct}% (misses 1 in ${shown})`;
 }
 
-function rateId(rate: number): RateId {
-  if (rate >= 7.5e11) return 'tw';
-  if (rate >= 1e11) return 'mid';
-  return 'gw';
+function sizeChip(area: number): string {
+  const across = Math.round(70 * Math.sqrt(area / 800));
+  return `${fmtArea(area)} · ${across.toLocaleString('en-US')} m across · ${fmtPower(area * W_PER_M2)}`;
 }
 
 export function createKesslerTab(summary: (text: string) => void) {
@@ -175,29 +175,53 @@ export function createKesslerTab(summary: (text: string) => void) {
   });
   pause.element.classList.add('hud-corner');
 
-  const badge = el('div', 'badge', 'Reference fleet: Starlink today');
-  badge.hidden = true;
-  const eachLine = el('div', 'caption');
-
-  const rate = createSegmented<RateId>({
+  const rate = createSlider({
     id: 'k-rate',
-    label: 'Rate',
-    options: [
-      { value: 'gw', label: '1 GW/yr' },
-      { value: 'mid', label: '500 GW/yr' },
-      { value: 'tw', label: '1 TW/yr' },
+    label: 'Deployment rate',
+    min: 1e7,
+    max: 1e12,
+    step: 1,
+    value: STARLINK_RATE,
+    scale: 'log',
+    format: (v) => `${fmtPower(v)}/yr`,
+    onInput: (v) => {
+      state.rate = v;
+      wrapped();
+    },
+  });
+  const rateSnaps = createButtonRow(
+    RATE_SNAPS.map((snap) => ({
+      label: snap.label,
+      onClick: () => {
+        state.rate = snap.watts;
+        rate.setValue(snap.watts, true);
+        wrapped();
+      },
+    })),
+    'chips',
+  );
+  const area = createSlider({
+    id: 'k-area',
+    label: 'Size of each satellite',
+    min: 50,
+    max: 200000,
+    step: 1,
+    value: 116,
+    scale: 'log',
+    format: sizeChip,
+    sublabel: 'Starlink (116 m²) · SpaceX AI sat (800 m²)',
+    marks: [
+      { value: 116, label: '' },
+      { value: 800, label: '' },
     ],
-    value: 'gw',
-    onChange: (id) => {
-      state.starlink = false;
-      state.rate = RATES[id];
-      syncN(true);
+    onInput: (v) => {
+      state.area = v;
       wrapped();
     },
   });
   const life = createSlider({
     id: 'k-life',
-    label: 'Lifetime',
+    label: 'Satellite lifetime',
     min: 3,
     max: 15,
     step: 1,
@@ -205,33 +229,8 @@ export function createKesslerTab(summary: (text: string) => void) {
     format: (v) => `${Math.round(v)} years`,
     onInput: (v) => {
       state.L = v;
-      if (!state.starlink) syncN(true);
       wrapped();
     },
-  });
-  const nSlider = createSlider({
-    id: 'k-n',
-    label: 'Satellites in orbit',
-    min: satelliteCount(1e9, 5, 20e6),
-    max: satelliteCount(1e9, 5, 10e3),
-    step: 1,
-    value: satelliteCount(1e9, 5, 120e3),
-    scale: 'log',
-    format: (v) => fmtBig(v),
-    marks: [{ value: 1_000_000, label: 'SpaceX filing: 1,000,000' }],
-    onInput: (v) => {
-      state.starlink = false;
-      state.pSat = powerPerSatellite(state.rate, state.L, v);
-      wrapped();
-    },
-  });
-  const resetSat = el('button', 'text-link', 'reset to SpaceX satellite');
-  resetSat.type = 'button';
-  resetSat.addEventListener('click', () => {
-    state.starlink = false;
-    state.pSat = 120e3;
-    syncN(true);
-    wrapped();
   });
 
   const preset = createSegmented<Preset>({
@@ -245,7 +244,6 @@ export function createKesslerTab(summary: (text: string) => void) {
     ],
     value: 'spacex',
     onChange: (value) => {
-      state.starlink = false;
       state.preset = value;
       band.element.hidden = value !== 'custom';
       wrapped();
@@ -398,17 +396,14 @@ export function createKesslerTab(summary: (text: string) => void) {
       'scenarios',
     ),
     rate.element,
-    life.element,
-    nSlider.element,
-    eachLine,
-    resetSat,
-    badge,
+    rateSnaps,
+    area.element,
     preset.element,
     band.element,
     el('h2', 'section-title', 'Avoidance'),
     dodge.element,
     disp.element,
-    createCollapsible('Advanced', [debrisToggle.element, vuln.element, frag.element, coord.element, years.element, usdW.element, usdKg.element]),
+    createCollapsible('Advanced', [life.element, debrisToggle.element, vuln.element, frag.element, coord.element, years.element, usdW.element, usdKg.element]),
     el('div', 'footer-row', ''),
   );
   const footer = controls.querySelector('.footer-row') as HTMLElement;
@@ -425,20 +420,9 @@ export function createKesslerTab(summary: (text: string) => void) {
     return node;
   }
 
-  function syncN(fromPower: boolean): void {
-    const min = satelliteCount(state.rate, state.L, 20e6);
-    const max = satelliteCount(state.rate, state.L, 10e3);
-    const n = fromPower ? satelliteCount(state.rate, state.L, state.pSat) : nSlider.getValue();
-    nSlider.setRange(min, max, Math.min(max, Math.max(min, n)));
-    nSlider.setMarks([{ value: 1_000_000, label: 'SpaceX filing: 1,000,000' }]);
-    rate.setDisabled(state.starlink);
-    nSlider.setDisabled(state.starlink);
-    badge.hidden = !state.starlink;
-    band.element.hidden = state.preset !== 'custom';
-  }
-
   function paintControls(): void {
-    rate.setValue(rateId(state.rate), true);
+    rate.setValue(state.rate, true);
+    area.setValue(state.area, true);
     life.setValue(state.L, true);
     dodge.setValue(state.dodge, true);
     disp.setValue(state.dispPct, true);
@@ -451,7 +435,7 @@ export function createKesslerTab(summary: (text: string) => void) {
     preset.setValue(state.preset, true);
     band.setValue(state.band, true);
     debrisToggle.setValue(state.debris, true);
-    syncN(true);
+    band.element.hidden = state.preset !== 'custom';
     pause.setValue(state.paused, true);
     scene.setPaused(state.paused);
     scene.setDebris(state.debris);
@@ -460,16 +444,18 @@ export function createKesslerTab(summary: (text: string) => void) {
   function applyScenario(kind: 'filed' | 'best' | 'starlink'): void {
     const rateNow = state.rate;
     const next = defaults();
-    if (kind === 'best') {
+    if (kind === 'filed') {
+      next.rate = 1e9;
+      next.area = 800;
+      next.preset = 'spacex';
+    } else if (kind === 'best') {
       next.rate = rateNow;
+      next.area = 800;
       next.preset = 'low';
       next.dodge = 99.99;
       next.dispPct = 0.1;
       next.vulnPct = 5;
       next.coord = 0.01;
-    } else if (kind === 'starlink') {
-      next.starlink = true;
-      next.preset = 'starlink';
     }
     Object.assign(state, next);
     paintControls();
@@ -480,7 +466,7 @@ export function createKesslerTab(summary: (text: string) => void) {
     return kessler({
       rateWPerYr: state.rate,
       LYr: state.L,
-      pSat: state.pSat,
+      pSat: state.area * W_PER_M2,
       preset: state.preset,
       band: state.band,
       s: state.dodge / 100,
@@ -491,13 +477,26 @@ export function createKesslerTab(summary: (text: string) => void) {
       coord: state.coord,
       usdPerW: state.usdPerW,
       usdPerKg: state.usdPerKg,
-      fleetOverride: state.starlink ? { N: STARLINK_N, A: STARLINK_A, m: 800 } : null,
     });
   }
 
   function recompute(): void {
     const result = resultOf();
-    const count = scene.apply(result.shells);
+    scene.resetSim();
+    const rates = kesslerShellRates({
+      rateWPerYr: state.rate,
+      LYr: state.L,
+      pSat: state.area * W_PER_M2,
+      preset: state.preset,
+      band: state.band,
+      s: state.dodge / 100,
+      fDisp: state.dispPct / 100,
+      fVuln: state.vulnPct / 100,
+      tYr: state.tYr,
+      fFrag: state.fFrag,
+      coord: state.coord,
+    });
+    const count = scene.apply(result.shells, { area: result.A_sat, kills: rates.kills, coll: rates.coll_total });
     const style = r0Style(result.R0_max);
     const status = result.R0_max < 1 ? 'Stable' : result.R0_max < 10 ? 'Past tipping point' : 'Runaway';
     bannerTitle.textContent = status;
@@ -524,7 +523,7 @@ export function createKesslerTab(summary: (text: string) => void) {
     camSub.textContent = `${fmtSig(result.cam_ratio_vs_starlink, 2)}× Starlink today`;
     hitsNum.set(fmtBig(result.kills_per_yr));
     const pct = result.N > 0 ? (100 * result.kills_per_yr) / result.N : 0;
-    hitsSub.textContent = `${fmtSig(pct)}% of fleet per year`;
+    hitsSub.textContent = `${fmtSig(pct)}% per satellite per year`;
     deadNum.set(fmtBig(result.derelicts));
     deadSub.textContent = `after ${Math.round(state.tYr)} years`;
     fragBody.textContent = `${fmtBig(result.fragments_per_yr)} trackable fragments (≥10 cm) and ${fmtBig(result.small_fragments_per_yr)} untracked fragments (1-10 cm). Today's entire untracked population: ~1.2 million.`;
@@ -539,14 +538,7 @@ export function createKesslerTab(summary: (text: string) => void) {
     );
     const perDot = count > 0 ? result.N / count : 1;
     dots.textContent = perDot < 1.05 ? 'each dot = 1 satellite' : `each dot = ${fmtBig(Math.max(1, perDot))} satellites`;
-    const across = Math.round(result.span_m).toLocaleString('en-US');
-    eachLine.textContent = state.starlink
-      ? `${fmtArea(STARLINK_A)} · ${across} m across each`
-      : `${fmtPower(state.pSat)} · ${fmtArea(result.A_sat)} · ${across} m across each`;
     summary(`${fmtBig(result.N)} sats · R₀ ${fmtSig(result.R0_max)}`);
-    rate.setDisabled(state.starlink);
-    nSlider.setDisabled(state.starlink);
-    badge.hidden = !state.starlink;
   }
 
   function line(label: string, value: string): HTMLElement {
@@ -560,10 +552,10 @@ export function createKesslerTab(summary: (text: string) => void) {
     window.clearTimeout(urlTimer);
     urlTimer = window.setTimeout(() => {
       const params = new URLSearchParams();
-      if (!state.starlink && state.rate !== 1e9) params.set('rate', state.rate.toExponential().replace('+', ''));
+      if (Math.abs(state.rate - STARLINK_RATE) / STARLINK_RATE > 0.01) params.set('rate', state.rate.toExponential().replace('+', ''));
+      if (Math.abs(state.area - 116) > 0.5) params.set('area', String(Math.round(state.area)));
       if (state.L !== 5) params.set('L', String(state.L));
-      if (!state.starlink && state.pSat !== 120e3) params.set('psat', String(Math.round(state.pSat)));
-      if (state.preset !== 'spacex') params.set('preset', state.preset);
+      if (state.preset !== 'starlink') params.set('preset', state.preset);
       if (state.preset === 'custom' && (state.band[0] !== 500 || state.band[1] !== 1000)) {
         params.set('band', `${state.band[0]}-${state.band[1]}`);
       }
@@ -606,12 +598,12 @@ export function createKesslerTab(summary: (text: string) => void) {
       const next = defaults();
       if (params.has('rate')) next.rate = Number(params.get('rate'));
       if (params.has('L')) next.L = Number(params.get('L'));
-      if (params.has('psat')) next.pSat = Number(params.get('psat'));
+      if (params.has('area')) next.area = Number(params.get('area'));
+      else if (params.has('psat')) next.area = Number(params.get('psat')) / W_PER_M2;
       const presetName = params.get('preset');
       if (presetName === 'low' || presetName === 'spread' || presetName === 'custom' || presetName === 'starlink' || presetName === 'spacex') {
         next.preset = presetName;
       }
-      if (presetName === 'starlink') next.starlink = true;
       const bandRaw = params.get('band');
       if (bandRaw && bandRaw.includes('-')) {
         const [a, b] = bandRaw.split('-').map(Number);

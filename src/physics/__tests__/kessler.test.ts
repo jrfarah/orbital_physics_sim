@@ -5,6 +5,7 @@ import {
   activeSatelliteTerm,
   debrisLifetimeYr,
   kessler,
+  kesslerShellRates,
   type KesslerInput,
 } from '../kessler';
 import { expectClose } from './close';
@@ -66,6 +67,30 @@ describe('kessler', () => {
     const got = kessler({ fleetOverride: { N: 9000, A: 116, m: 800 }, preset: 'starlink', pSat: 1 });
     expect(Math.abs(got.cam_per_month - 34525.3) / 34525.3).toBeLessThanOrEqual(0.001);
     for (const r0 of Object.values(got.R0_by_shell)) expect(r0).toBeLessThan(0.1);
+  });
+
+  it('shell rates sum to the yearly totals', () => {
+    for (const input of Object.values(cases)) {
+      const got = kessler(input);
+      const rates = kesslerShellRates(input);
+      expectClose(rates.kills.reduce((sum, value) => sum + value, 0), got.kills_per_yr);
+      expectClose(rates.coll_total.reduce((sum, value) => sum + value, 0), got.collisions_per_yr);
+    }
+  });
+
+  it('Starlink slider settings keep N and every R0 shell', () => {
+    const area = 116;
+    const got = kessler({
+      rateWPerYr: (9000 * area * 150) / 5,
+      LYr: 5,
+      pSat: area * (120000 / 800),
+      preset: 'starlink',
+    });
+    expect(Math.abs(got.N - 9000)).toBeLessThanOrEqual(1);
+    const shells = fixtures.kessler.starlink_today.R0_by_shell as Record<string, number>;
+    for (const [h, value] of Object.entries(shells)) {
+      expect(Math.abs((got.R0_by_shell[h] ?? NaN) - value)).toBeLessThanOrEqual(1e-4);
+    }
   });
 
   it('active-satellite term depends on area, not satellite count', () => {
