@@ -9,13 +9,15 @@ import {
   Vector2,
   type WebGLProgramParametersWithUniforms,
 } from 'three';
-import { getNoiseTexture, sampleNoise } from './noise';
+import { getEmberNoise, getNoiseTexture, sampleNoise } from './noise';
 
 const STOPS: { t: number; rgb: [number, number, number] }[] = [
-  { t: 0, rgb: [42, 8, 4] },
-  { t: 0.35, rgb: [122, 23, 10] },
-  { t: 0.65, rgb: [194, 52, 26] },
-  { t: 1, rgb: [255, 122, 46] },
+  { t: 0, rgb: [18, 3, 2] },
+  { t: 0.2, rgb: [58, 9, 4] },
+  { t: 0.45, rgb: [122, 20, 7] },
+  { t: 0.7, rgb: [184, 41, 12] },
+  { t: 0.9, rgb: [226, 68, 26] },
+  { t: 1, rgb: [226, 68, 26] },
 ];
 
 function srgbToLinearByte(c: number): number {
@@ -113,7 +115,32 @@ function whiteMap(): DataTexture {
   return white;
 }
 
+/** Shared by every ember material. The bloom pass sets this to 1. */
+export const bloomOnly = { value: 0 };
+
 const HEAT_GLSL = /* glsl */ `
+vec3 srgbToLin(vec3 c){
+  return mix(c/12.92, pow((c+0.055)/1.055, vec3(2.4)), step(vec3(0.04045), c));
+}
+vec3 emberRamp(float k){
+  vec3 c0 = srgbToLin(vec3(18.0, 3.0, 2.0)/255.0);
+  vec3 c1 = srgbToLin(vec3(58.0, 9.0, 4.0)/255.0);
+  vec3 c2 = srgbToLin(vec3(122.0, 20.0, 7.0)/255.0);
+  vec3 c3 = srgbToLin(vec3(184.0, 41.0, 12.0)/255.0);
+  vec3 c4 = srgbToLin(vec3(226.0, 68.0, 26.0)/255.0);
+  if (k < 0.20) return mix(c0, c1, clamp(k / 0.20, 0.0, 1.0));
+  if (k < 0.45) return mix(c1, c2, clamp((k - 0.20) / 0.25, 0.0, 1.0));
+  if (k < 0.70) return mix(c2, c3, clamp((k - 0.45) / 0.25, 0.0, 1.0));
+  if (k < 0.90) return mix(c3, c4, clamp((k - 0.70) / 0.20, 0.0, 1.0));
+  return c4;
+}
+`;
+
+export interface HeatMaterial extends MeshStandardMaterial {
+  userData: { heat: { value: number }; time: { value: number }; side: { value: number } };
+}
+
+const TILE_GLSL = /* glsl */ `
 vec3 srgbToLin(vec3 c){
   return mix(c/12.92, pow((c+0.055)/1.055, vec3(2.4)), step(vec3(0.04045), c));
 }
@@ -128,18 +155,8 @@ vec3 emberRamp(float k){
 }
 `;
 
-export interface HeatMaterial extends MeshStandardMaterial {
-  userData: { heat: { value: number } };
-}
-
-export function createHeatMaterial(
-  heat01 = 0,
-  tiles = false,
-  noise: { offset: [number, number]; rotation: number } = { offset: [0, 0], rotation: 0 },
-): HeatMaterial {
+function createTileMaterial(heat01: number): HeatMaterial {
   const heat = { value: heat01 };
-  const noiseOffset = { value: new Vector2(noise.offset[0], noise.offset[1]) };
-  const noiseRotation = { value: noise.rotation };
   const mat = new MeshStandardMaterial({
     color: 0x3d424a,
     metalness: 0.85,
@@ -149,21 +166,17 @@ export function createHeatMaterial(
     envMapIntensity: 0,
   }) as HeatMaterial;
   mat.userData.heat = heat;
-  mat.customProgramCacheKey = () => (tiles ? 'heat-tiles-v2' : 'heat-face-v3');
+  mat.userData.time = { value: 0 };
+  mat.userData.side = { value: 1 };
+  mat.customProgramCacheKey = () => 'heat-tiles-v2';
   mat.onBeforeCompile = (shader: WebGLProgramParametersWithUniforms) => {
     shader.uniforms.uHeat = heat;
     shader.uniforms.uNoise = { value: getNoiseTexture() };
-    shader.uniforms.uNoiseOffset = noiseOffset;
-    shader.uniforms.uNoiseRotation = noiseRotation;
+    shader.uniforms.uNoiseOffset = { value: new Vector2(0, 0) };
+    shader.uniforms.uNoiseRotation = { value: 0 };
     shader.vertexShader = shader.vertexShader
-      .replace(
-        '#include <common>',
-        `#include <common>\n${tiles ? 'attribute float aScale;\nattribute float aMix;\nvarying float vMix;' : ''}`,
-      )
-      .replace(
-        '#include <begin_vertex>',
-        tiles ? 'vec3 transformed = vec3(position) * aScale;\nvMix = aMix;' : '#include <begin_vertex>',
-      );
+      .replace('#include <common>', '#include <common>\nattribute float aScale;\nattribute float aMix;\nvarying float vMix;')
+      .replace('#include <begin_vertex>', 'vec3 transformed = vec3(position) * aScale;\nvMix = aMix;');
     shader.fragmentShader = shader.fragmentShader
       .replace(
         '#include <common>',
@@ -172,8 +185,8 @@ uniform float uHeat;
 uniform sampler2D uNoise;
 uniform vec2 uNoiseOffset;
 uniform float uNoiseRotation;
-${tiles ? 'varying float vMix;' : ''}
-${HEAT_GLSL}`,
+varying float vMix;
+${TILE_GLSL}`,
       )
       .replace(
         '#include <map_fragment>',
@@ -190,10 +203,136 @@ float k = uHeat < 0.02 ? 0.0 : smoothstep(threshold - 0.05, threshold + 0.05, 1.
 vec3 ember = emberRamp(k);
 vec3 warm = srgbToLin(vec3(122.0, 23.0, 10.0)/255.0);
 diffuseColor.rgb = mix(diffuseColor.rgb, warm, 0.06 * uHeat);
+vec3 solar = srgbToLin(vec3(22.0, 48.0, 110.0)/255.0);
+float cell = min(abs(fract(heatUv.x * 5.0) - 0.5), abs(fract(heatUv.y * 7.0) - 0.5));
+float grid = smoothstep(0.02, 0.07, cell);
+vec3 solarCol = solar * mix(0.62, 1.0, grid);
+diffuseColor.rgb = mix(diffuseColor.rgb, solarCol, vMix);`,
+      )
+      .replace(
+        '#include <roughnessmap_fragment>',
+        `#include <roughnessmap_fragment>
+float streak = texture2D(uNoise, heatUv * vec2(8.0, 1.0)).r;
+roughnessFactor *= mix(0.82, 1.18, streak);
+roughnessFactor = mix(roughnessFactor, 0.42, vMix);`,
+      )
+      .replace('#include <metalnessmap_fragment>', '#include <metalnessmap_fragment>\nmetalnessFactor = mix(metalnessFactor, 0.12, vMix);')
+      .replace(
+        '#include <emissivemap_fragment>',
+        `#include <emissivemap_fragment>
+totalEmissiveRadiance += ember * (0.15 + 1.6 * k);
+totalEmissiveRadiance = mix(totalEmissiveRadiance, solarCol * 0.25, vMix);`,
+      );
+  };
+  return mat;
+}
+
+export function createHeatMaterial(
+  heat01 = 0,
+  tiles = false,
+  noise: { offset: [number, number]; rotation: number; scale?: number } = { offset: [0, 0], rotation: 0 },
+): HeatMaterial {
+  if (tiles) return createTileMaterial(heat01);
+  const heat = { value: heat01 };
+  const noiseOffset = { value: new Vector2(noise.offset[0], noise.offset[1]) };
+  const noiseRotation = { value: noise.rotation };
+  const noiseScale = { value: noise.scale ?? 1 };
+  const mat = new MeshStandardMaterial({
+    color: 0x3d424a,
+    metalness: 0.85,
+    roughness: 0.38,
+    map: whiteMap(),
+    envMap: null,
+    envMapIntensity: 0,
+  }) as HeatMaterial;
+  mat.userData.heat = heat;
+  const time = { value: 0 };
+  const side = { value: 1 };
+  mat.userData.time = time;
+  mat.userData.side = side;
+  mat.customProgramCacheKey = () => 'heat-face-v6';
+  mat.onBeforeCompile = (shader: WebGLProgramParametersWithUniforms) => {
+    shader.uniforms.uHeat = heat;
+    shader.uniforms.uNoise = { value: getEmberNoise() };
+    shader.uniforms.uNoiseOffset = noiseOffset;
+    shader.uniforms.uNoiseRotation = noiseRotation;
+    shader.uniforms.uNoiseScale = noiseScale;
+    shader.uniforms.uBloomOnly = bloomOnly;
+    shader.uniforms.uTime = time;
+    shader.uniforms.uSide = side;
+    shader.vertexShader = shader.vertexShader
+      .replace(
+        '#include <common>',
+        `#include <common>\n${
+          tiles
+            ? `attribute float aBirth;
+attribute float aDeath;
+attribute float aSeed;
+attribute float aKind;
+attribute float aKindFrom;
+attribute float aKindT0;
+uniform float uTime;
+uniform float uSide;
+varying float vMix;
+varying float vSeed;`
+            : ''
+        }`,
+      )
+      .replace(
+        '#include <begin_vertex>',
+        tiles
+          ? `float popIn = smoothstep(0.0, 0.25, uTime - aBirth);
+float pop = aDeath < 0.0 ? popIn : popIn * (1.0 - smoothstep(0.0, 0.25, uTime - aDeath));
+vec3 transformed = position * max(pop, 0.0) * uSide;
+float kt = aKindT0 < 0.0 ? 1.0 : clamp((uTime - aKindT0) / 0.3, 0.0, 1.0);
+vMix = mix(aKindFrom, aKind, kt);
+vSeed = aSeed;`
+          : '#include <begin_vertex>',
+      );
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        '#include <common>',
+        `#include <common>
+uniform float uHeat;
+uniform sampler2D uNoise;
+uniform vec2 uNoiseOffset;
+uniform float uNoiseRotation;
+uniform float uNoiseScale;
+uniform float uBloomOnly;
+vec3 emberOut;
+${tiles ? 'varying float vMix;\nvarying float vSeed;' : ''}
+${HEAT_GLSL}`,
+      )
+      .replace(
+        '#include <map_fragment>',
+        `#include <map_fragment>
+vec2 mapUv = vMapUv;
+float rot = uNoiseRotation;
+vec2 off = uNoiseOffset;
+float scl = uNoiseScale;
+${
+  tiles
+    ? `rot = fract(vSeed * 17.13) * 6.2831853;
+off = vec2(fract(vSeed * 3.17), fract(vSeed * 9.71));
+scl = 0.7 + 0.7 * fract(vSeed * 5.31);`
+    : ''
+}
+float cs = cos(rot);
+float sn = sin(rot);
+vec2 heatUv = mat2(cs, sn, -sn, cs) * (mapUv * scl) + off;
+float nR = texture2D(uNoise, heatUv).r;
+float nG = texture2D(uNoise, heatUv * 2.0).g;
+float border = min(min(mapUv.x, 1.0 - mapUv.x), min(mapUv.y, 1.0 - mapUv.y));
+float edge = 1.0 - smoothstep(0.0, 0.5, border);
+float field = 0.6 * nR + 0.25 * nG + 0.15 * (1.0 - edge);
+float cover = smoothstep(1.0 - uHeat * 1.1 - 0.25, 1.0 - uHeat * 1.1 + 0.25, field);
+float inten = cover * uHeat * (0.75 + 0.5 * nG);
+vec3 ember = emberRamp(inten);
+diffuseColor.rgb *= (1.0 - 0.6 * cover);
 ${
   tiles
     ? `vec3 solar = srgbToLin(vec3(22.0, 48.0, 110.0)/255.0);
-float cell = min(abs(fract(heatUv.x * 5.0) - 0.5), abs(fract(heatUv.y * 7.0) - 0.5));
+float cell = min(abs(fract(mapUv.x * 5.0) - 0.5), abs(fract(mapUv.y * 7.0) - 0.5));
 float grid = smoothstep(0.02, 0.07, cell);
 vec3 solarCol = solar * mix(0.62, 1.0, grid);
 diffuseColor.rgb = mix(diffuseColor.rgb, solarCol, vMix);`
@@ -215,8 +354,13 @@ ${tiles ? 'metalnessFactor = mix(metalnessFactor, 0.12, vMix);' : ''}`,
       .replace(
         '#include <emissivemap_fragment>',
         `#include <emissivemap_fragment>
-totalEmissiveRadiance += ember * (0.15 + 1.6 * k);
-${tiles ? 'totalEmissiveRadiance = mix(totalEmissiveRadiance, solarCol * 0.25, vMix);' : ''}`,
+emberOut = ember * (0.2 + 3.0 * pow(max(inten, 0.0), 1.4));
+${tiles ? 'emberOut *= (1.0 - vMix);\ntotalEmissiveRadiance += emberOut;\ntotalEmissiveRadiance += solarCol * 0.25 * vMix;' : 'totalEmissiveRadiance += emberOut;'}`,
+      )
+      .replace(
+        '#include <dithering_fragment>',
+        `#include <dithering_fragment>
+if (uBloomOnly > 0.5) gl_FragColor = vec4(emberOut, 1.0);`,
       );
   };
   return mat;

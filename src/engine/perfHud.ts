@@ -1,3 +1,4 @@
+import { earthTextureLine } from './earth';
 import { subscribePerf, type PerfSample } from './renderer';
 
 /** Dev overlay. Visible only when the URL contains `perf=1`. */
@@ -28,6 +29,7 @@ export function mountPerfHud(): void {
       `pixel ratio ${last ? last.pixelRatio.toFixed(3) : '—'}`,
       `animations ${idle ? 0 : (last?.animations ?? 0)}`,
       `scene ${last?.scene ?? '—'}`,
+      earthTextureLine(),
     ];
     root.textContent = lines.join('\n');
   };

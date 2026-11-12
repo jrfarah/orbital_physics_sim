@@ -83,7 +83,7 @@ export function createThermalTab(summary: (text: string) => void) {
   const stats = el('div', 'pair');
   const radStat = el('div', 'num-lg');
   const solStat = el('div', 'num-lg');
-  stats.append(labeled('Radiator', radStat), labeled('Solar', solStat));
+  stats.append(labeled('Radiator', radStat, '#c4341a'), labeled('Solar', solStat, '#2a5bd7'));
   const delta = el('div', 'delta');
   delta.hidden = true;
   hero.body.append(stats, delta);
@@ -223,6 +223,7 @@ export function createThermalTab(summary: (text: string) => void) {
   tHot.element.hidden = true;
   eta.element.hidden = true;
   let powerAnim = 0;
+  let zoomPower = false;
   function stopPowerAnim(): void {
     if (powerAnim) cancelAnimationFrame(powerAnim);
     powerAnim = 0;
@@ -239,6 +240,7 @@ export function createThermalTab(summary: (text: string) => void) {
     onInput: (v) => {
       stopPowerAnim();
       state.power = v;
+      zoomPower = true;
       wrapped();
     },
   });
@@ -247,6 +249,7 @@ export function createThermalTab(summary: (text: string) => void) {
     if (reducedMotion()) {
       state.power = target;
       power.setValue(target, true);
+      zoomPower = true;
       wrapped();
       return;
     }
@@ -256,6 +259,7 @@ export function createThermalTab(summary: (text: string) => void) {
       const t = Math.min(1, (performance.now() - t0) / 600);
       state.power = t >= 1 ? target : Math.exp(Math.log(from) + (Math.log(target) - Math.log(from)) * t);
       power.setValue(state.power, true);
+      zoomPower = true;
       recompute();
       writeUrl();
       powerAnim = t < 1 ? requestAnimationFrame(step) : 0;
@@ -336,11 +340,15 @@ export function createThermalTab(summary: (text: string) => void) {
     const input = inputFor(p);
     const result = thermalBudget(input);
     const bare = thermalBudget({ ...input, pump: false, T_hot: null });
-    scene.layout({
-      aRad: result.A_rad,
-      aTot: result.A_tot,
-      tHot: result.T_hot,
-    });
+    scene.layout(
+      {
+        aRad: result.A_rad,
+        aTot: result.A_tot,
+        tHot: result.T_hot,
+      },
+      zoomPower,
+    );
+    zoomPower = false;
     total.set(fmtArea(result.A_tot));
     radStat.textContent = fmtArea(result.A_rad);
     solStat.textContent = fmtArea(result.A_sol);
@@ -436,9 +444,16 @@ export function createThermalTab(summary: (text: string) => void) {
   };
 }
 
-function labeled(label: string, value: HTMLElement): HTMLElement {
+function labeled(label: string, value: HTMLElement, swatch?: string): HTMLElement {
   const node = el('div');
-  node.append(el('div', 'field-label', label), value);
+  const head = el('div', 'field-label');
+  if (swatch) {
+    const dot = el('i', 'swatch');
+    dot.style.background = swatch;
+    head.append(dot);
+  }
+  head.append(document.createTextNode(label));
+  node.append(head, value);
   return node;
 }
 

@@ -17,7 +17,7 @@ import { Scene } from 'three';
 import { R_E } from '../../physics/constants';
 import { H_C, SHAPE, V_SH, type ShellRow } from '../../physics/kessler';
 import { createEarth } from '../../engine/earth';
-import { clearUserOrbit, createControls, isMobile, makeCamera, reducedMotion, requestRender, type TabView } from '../../engine/renderer';
+import { clearUserOrbit, createControls, getRenderer, isMobile, makeCamera, reducedMotion, requestRender, setEmberGlare, type TabView } from '../../engine/renderer';
 import { createStarfield, createSunSprite } from '../../engine/starfield';
 import { r0Style } from './gauges';
 import { orbitPosition } from './orbit';
@@ -62,11 +62,19 @@ function omegaOf(rKm: number): number {
 }
 
 interface ShellVis {
-  mesh: Mesh;
-  mat: ShaderMaterial;
   radius: number;
   row: ShellRow;
+  count: number;
+  color: Color;
 }
+
+interface Band {
+  mesh: Mesh;
+  mat: ShaderMaterial;
+  rows: ShellRow[];
+}
+
+const MAX_SHELLS = 36;
 
 export function createKesslerScene(tip: HTMLElement) {
   const mobile = isMobile();
@@ -74,8 +82,9 @@ export function createKesslerScene(tip: HTMLElement) {
   const earth = createEarth(mobile);
   scene.add(earth.group, earth.sun, earth.ambient, createStarfield(mobile), createSunSprite());
 
-  const shellGeo = new SphereGeometry(1, mobile ? 32 : 48, mobile ? 24 : 32);
   const shells: ShellVis[] = [];
+  const bands: Band[] = [];
+  const shellGeo = new SphereGeometry(1, mobile ? 32 : 48, mobile ? 24 : 32);
 
   const satGeo = new BufferGeometry();
   const satRadius = new Float32Array(MAX_SATS);
@@ -138,7 +147,7 @@ export function createKesslerScene(tip: HTMLElement) {
   const debrisMat = new ShaderMaterial({
     transparent: true,
     depthWrite: false,
-    uniforms: { uTime: { value: 0 } },
+    uniforms: { uTime: { value: 0 }, uPointSize: { value: 1.2 } },
     vertexShader: /* glsl */ `
       attribute float aRadius;
       attribute float aIncl;
@@ -146,11 +155,12 @@ export function createKesslerScene(tip: HTMLElement) {
       attribute float aPhase0;
       attribute float aOmega;
       uniform float uTime;
+      uniform float uPointSize;
       ${ORBIT}
       void main() {
         vec3 world = orbitPos(aRadius, aIncl, aRaan, aPhase0, aOmega, uTime);
         gl_Position = projectionMatrix * modelViewMatrix * vec4(world, 1.0);
-        gl_PointSize = 1.2;
+        gl_PointSize = uPointSize;
       }
     `,
     fragmentShader: /* glsl */ `
@@ -166,7 +176,7 @@ export function createKesslerScene(tip: HTMLElement) {
   debris.renderOrder = 1;
   scene.add(debris);
 
-  const POOL = 512;
+  const POOL = 1152;
   const flashPos = new Float32Array(POOL * 3);
   const flashAge = new Float32Array(POOL);
   const flashKind = new Float32Array(POOL);
@@ -248,33 +258,55 @@ export function createKesslerScene(tip: HTMLElement) {
   let quality = 0;
   let lastRows: ShellRow[] = [];
   let sig = '';
+  let pointPx = 2;
   let instances = 0;
-  let ranges: { start: number; count: number; h: number }[] = [];
+  let ranges: { start: number; count: number; h: number; n: number }[] = [];
   const killRate = new Map<number, number>();
   const collRate = new Map<number, number>();
+  const workRate = new Map<number, number>();
   let dayScale = 7;
   let simDays = 0;
-  let lost = 0;
+  let workLost = 0;
+  let debrisColl = 0;
+  let linearOk = true;
   let saturated = false;
+  let tokens = 45;
+  let speed = 1.5;
+  let speedFrom = 1.5;
+  let speedTarget = 1.5;
+  let speedT0 = 0;
   const clock = el('div', 'sim-clock');
-  const clockTime = el('div', '', 'Simulated time: 0 yr 0 d');
-  const clockLost = el('div', '', 'Satellites lost (simulated): 0');
-  const clockNote = el('div', 'caption', 'Flashes are illustrative; their rate follows the model.');
+  const clockHead = el('div', 'clock-head');
+  const clockTime = el('div', '', 'Simulated time: 0 d');
+  const clockGlyph = el('span', 'clock-glyph', '▶▶');
+  clockHead.append(clockTime, clockGlyph);
+  const clockLost = el('div', '', 'Working satellites lost: 0');
+  const clockColl = el('div', '', 'Debris-making collisions: 0');
+  const clockNote = el('div', 'caption', 'Flashes are illustrative; rates follow the model.');
   const clockSat = el('div', 'caption', 'Losses faster than can be drawn');
   clockSat.hidden = true;
-  const scales = el('div', 'chip-grid');
-  for (const [label, days] of [['1 day', 1], ['1 week', 7], ['1 month', 365.25 / 12]] as const) {
-    const button = el('button', 'btn', `1 s = ${label}`);
+  const scales = el('div', 'time-row');
+  const speedLabel = el('div', 'field-label', 'Time speed');
+  for (const [label, days, orbit] of [
+    ['1 day/s', 1, 1],
+    ['1 week/s', 7, 1.5],
+    ['1 month/s', 365.25 / 12, 2.25],
+  ] as const) {
+    const button = el('button', 'btn', label);
     button.type = 'button';
     if (days === 7) button.classList.add('accent');
     button.addEventListener('click', () => {
       dayScale = days;
+      speedFrom = speed;
+      speedTarget = orbit;
+      speedT0 = performance.now();
+      clockGlyph.textContent = orbit === 1 ? '▶' : orbit === 1.5 ? '▶▶' : '▶▶▶';
       for (const node of scales.querySelectorAll('button')) node.classList.remove('accent');
       button.classList.add('accent');
     });
     scales.append(button);
   }
-  clock.append(clockTime, scales, clockLost, clockNote, clockSat);
+  clock.append(clockHead, speedLabel, scales, clockLost, clockColl, clockNote, clockSat);
   const rayOrigin = new Vector3();
   const rayDir = new Vector3();
 
@@ -285,12 +317,67 @@ export function createKesslerScene(tip: HTMLElement) {
     return Math.max(80, Math.floor((mobile ? 600 : 1500) / 2 ** quality));
   }
 
-  function clearShells(): void {
-    for (const shell of shells) {
-      scene.remove(shell.mesh);
-      shell.mat.dispose();
+  function clearBands(): void {
+    for (const band of bands) {
+      scene.remove(band.mesh);
+      band.mat.dispose();
     }
+    bands.length = 0;
+  }
+
+  function bandGroups(rows: ShellRow[]): ShellRow[][] {
+    const ordered = [...rows].sort((a, b) => a.h - b.h);
+    if (ordered.length <= 8) return ordered.map((row) => [row]);
+    const size = Math.ceil(ordered.length / 8);
+    const groups: ShellRow[][] = [];
+    for (let i = 0; i < ordered.length; i += size) groups.push(ordered.slice(i, i + size));
+    return groups.slice(0, 8);
+  }
+
+  function makeBand(group: ShellRow[]): Band {
+    const worst = group.reduce((best, row) => (row.R0 > best.R0 ? row : best));
+    const radius = group.reduce((sum, row) => sum + (1 + row.h / R_E), 0) / group.length;
+    const style = r0Style(worst.R0);
+    const mat = new ShaderMaterial({
+      transparent: true,
+      depthWrite: false,
+      blending: CustomBlending,
+      blendSrc: OneFactor,
+      blendDst: OneMinusSrcColorFactor,
+      uniforms: {
+        uColor: { value: new Color().setRGB(style.rgb[0], style.rgb[1], style.rgb[2]) },
+      },
+      vertexShader: /* glsl */ `
+        varying vec3 vN;
+        varying vec3 vV;
+        void main() {
+          vec4 mv = modelViewMatrix * vec4(position, 1.0);
+          vN = normalize(normalMatrix * normal);
+          vV = normalize(-mv.xyz);
+          gl_Position = projectionMatrix * mv;
+        }
+      `,
+      fragmentShader: /* glsl */ `
+        varying vec3 vN;
+        varying vec3 vV;
+        uniform vec3 uColor;
+        void main() {
+          float fres = pow(1.0 - abs(dot(normalize(vN), normalize(vV))), 5.0);
+          float alpha = min(0.35, fres);
+          gl_FragColor = vec4(uColor * alpha, alpha);
+        }
+      `,
+    });
+    const mesh = new Mesh(shellGeo, mat);
+    mesh.renderOrder = 2;
+    mesh.scale.setScalar(radius);
+    scene.add(mesh);
+    return { mesh, mat, rows: group };
+  }
+
+  function clearShells(): void {
     shells.length = 0;
+    clearBands();
   }
 
   function buildShells(rows: ShellRow[]): void {
@@ -301,46 +388,11 @@ export function createKesslerScene(tip: HTMLElement) {
       return;
     }
     for (const row of rows) {
+      if (shells.length >= MAX_SHELLS) break;
       const style = r0Style(row.R0);
-      const mat = new ShaderMaterial({
-        transparent: true,
-        depthWrite: false,
-        blending: CustomBlending,
-        blendSrc: OneFactor,
-        blendDst: OneMinusSrcColorFactor,
-        uniforms: {
-          uColor: { value: new Color().setRGB(style.rgb[0], style.rgb[1], style.rgb[2]) },
-          uPulse: { value: 1 },
-        },
-        vertexShader: /* glsl */ `
-          varying vec3 vN;
-          varying vec3 vV;
-          void main() {
-            vec4 mv = modelViewMatrix * vec4(position, 1.0);
-            vN = normalize(normalMatrix * normal);
-            vV = normalize(-mv.xyz);
-            gl_Position = projectionMatrix * mv;
-          }
-        `,
-        fragmentShader: /* glsl */ `
-          varying vec3 vN;
-          varying vec3 vV;
-          uniform vec3 uColor;
-          uniform float uPulse;
-          void main() {
-            float fres = pow(1.0 - abs(dot(normalize(vN), normalize(vV))), 5.0);
-            float alpha = min(0.35, fres * uPulse);
-            gl_FragColor = vec4(uColor * alpha, alpha);
-          }
-        `,
-      });
-      const mesh = new Mesh(shellGeo, mat);
-      mesh.renderOrder = 2;
-      const radius = 1 + row.h / R_E;
-      mesh.scale.setScalar(radius);
-      scene.add(mesh);
-      shells.push({ mesh, mat, radius, row });
+      shells.push({ radius: 1 + row.h / R_E, row, count: 0, color: new Color().setRGB(style.rgb[0], style.rgb[1], style.rgb[2]) });
     }
+    for (const group of bandGroups(rows)) bands.push(makeBand(group));
   }
 
   function paintColors(rows: ShellRow[]): void {
@@ -350,14 +402,23 @@ export function createKesslerScene(tip: HTMLElement) {
       const row = byH.get(shell.row.h) ?? shell.row;
       shell.row = row;
       const style = r0Style(row.R0);
-      (shell.mat.uniforms.uColor.value as Color).setRGB(style.rgb[0], style.rgb[1], style.rgb[2]);
-      const count = Math.round(shell.mesh.userData.count as number);
+      shell.color.setRGB(style.rgb[0], style.rgb[1], style.rgb[2]);
+      const count = shell.count;
       for (let i = 0; i < count; i++) {
         satColor[(sat + i) * 3] = style.rgb[0];
         satColor[(sat + i) * 3 + 1] = style.rgb[1];
         satColor[(sat + i) * 3 + 2] = style.rgb[2];
       }
       sat += count;
+    }
+    for (const band of bands) {
+      let worst = band.rows[0]!;
+      for (const member of band.rows) {
+        const row = byH.get(member.h) ?? member;
+        if (row.R0 > worst.R0) worst = row;
+      }
+      const style = r0Style(worst.R0);
+      (band.mat.uniforms.uColor!.value as Color).setRGB(style.rgb[0], style.rgb[1], style.rgb[2]);
     }
     (satGeo.getAttribute('aColor') as BufferAttribute).needsUpdate = true;
   }
@@ -379,8 +440,8 @@ export function createKesslerScene(tip: HTMLElement) {
     ranges = [];
     rows.forEach((row, index) => {
       const count = Math.min(MAX_SATS - cursor, counts[index] ?? 0);
-      shells[index].mesh.userData.count = count;
-      ranges.push({ start: cursor, count, h: row.h });
+      if (shells[index]) shells[index]!.count = count;
+      ranges.push({ start: cursor, count, h: row.h, n: row.N });
       const style = r0Style(row.R0);
       for (let i = 0; i < count; i++) {
         const n = cursor + i;
@@ -449,6 +510,16 @@ export function createKesslerScene(tip: HTMLElement) {
     return Math.min(6, Math.max(1.4, 1.6 + 1.2 * Math.log10(Math.max(area, 1) / 100)));
   }
 
+  // Point size is in framebuffer pixels. Revision 2 drew at full device ratio
+  // (capped at 2). Kessler now renders at a lower ratio, so scale the buffer
+  // size to keep the same size on screen.
+  function bufferPoint(px: number): number {
+    const dpr = window.devicePixelRatio || 1;
+    const reference = Math.min(dpr, isMobile() ? 1.75 : 2);
+    const ratio = getRenderer().getPixelRatio();
+    return px * (ratio / reference);
+  }
+
   function spawnFlash(x: number, y: number, z: number, kind: number, life: number, vx = 0, vy = 0, vz = 0): void {
     const i = flashCursor % POOL;
     flashCursor += 1;
@@ -463,48 +534,73 @@ export function createKesslerScene(tip: HTMLElement) {
     flashVel[i * 3 + 2] = vz;
   }
 
-  function paintClock(): void {
+  let clockStamp = 0;
+  function paintClock(force = false): void {
+    const now = performance.now();
+    if (!force && now - clockStamp < 100) return;
+    clockStamp = now;
     const years = Math.floor(simDays / 365.25);
     const days = Math.floor(simDays - years * 365.25);
-    clockTime.textContent = `Simulated time: ${years} yr ${days} d`;
-    clockLost.textContent = `Satellites lost (simulated): ${lost.toLocaleString('en-US')}`;
+    const timeText = simDays < 365.25 ? `Simulated time: ${days} d` : `Simulated time: ${years} yr ${days} d`;
+    const off = linearOk ? '' : " (off the model's scale)";
+    const lostText = `Working satellites lost: ${Math.round(workLost).toLocaleString('en-US')}${off}`;
+    const collText = `Debris-making collisions: ${Math.round(debrisColl).toLocaleString('en-US')}${off}`;
+    if (clockTime.textContent !== timeText) clockTime.textContent = timeText;
+    if (clockLost.textContent !== lostText) clockLost.textContent = lostText;
+    if (clockColl.textContent !== collText) clockColl.textContent = collText;
+    clockLost.className = linearOk ? '' : 'bad';
+    clockColl.className = linearOk ? '' : 'bad';
     clockSat.hidden = !saturated;
   }
 
   function stepFlashes(dt: number): void {
     const dtYears = (dt * dayScale) / 365.25;
     simDays += dt * dayScale;
-    let spawned = 0;
-    let stop = false;
-    saturated = false;
+    let workFrame = 0;
+    let collFrame = 0;
     for (const range of ranges) {
-      if (stop || range.count <= 0) continue;
-      const kills = (killRate.get(range.h) ?? 0) * dtYears;
-      const colls = (collRate.get(range.h) ?? 0) * dtYears;
-      const nKill = poisson(kills, flashRng);
-      const nColl = poisson(colls, flashRng);
-      lost += nKill + nColl;
-      for (let n = 0; n < nKill + nColl; n++) {
-        if (spawned >= 40) {
-          saturated = true;
-          stop = true;
-          break;
+      if (range.count <= 0 || range.n <= 0) continue;
+      const work = workRate.get(range.h) ?? 0;
+      const coll = collRate.get(range.h) ?? 0;
+      const lostNow = range.n * (1 - Math.exp(-(work / range.n) * dtYears));
+      const collNow = coll * dtYears;
+      workLost += lostNow;
+      debrisColl += collNow;
+      workFrame += lostNow;
+      collFrame += collNow;
+    }
+    const expected = workFrame + collFrame;
+    const trueRate = dt > 0 ? expected / dt : 0;
+    tokens = Math.min(45, tokens + 45 * dt);
+    const draw = Math.min(Math.floor(tokens), poisson(Math.min(expected, tokens), flashRng));
+    tokens -= draw;
+    saturated = trueRate > 45;
+    if (saturated) clockSat.textContent = `Losses faster than can be drawn: ~${Math.round(trueRate).toLocaleString('en-US')} per second`;
+    const workShare = expected > 0 ? workFrame / expected : 1;
+    for (let n = 0; n < draw; n++) {
+      let pick = flashRng() * expected;
+      let range = ranges[0];
+      for (const candidate of ranges) {
+        if (!candidate || candidate.count <= 0 || candidate.n <= 0) continue;
+        const weight = (workRate.get(candidate.h) ?? 0) / candidate.n * candidate.n * dtYears + (collRate.get(candidate.h) ?? 0) * dtYears;
+        pick -= Math.max(weight, 0);
+        range = candidate;
+        if (pick <= 0) break;
+      }
+      if (!range || range.count <= 0) continue;
+      const index = range.start + Math.floor(flashRng() * range.count);
+      const u = satPhase[index] + satOmega[index] * time;
+      orbitPosition(satRadius[index], satIncl[index], satRaan[index], u, scratch);
+      const collision = flashRng() > workShare;
+      spawnFlash(scratch.x, scratch.y, scratch.z, collision ? 1 : 0, collision ? 0.6 : 0.26);
+      if (collision) {
+        const spark = 0.015;
+        for (let s = 0; s < 8; s++) {
+          tangent.set(flashRng() - 0.5, flashRng() - 0.5, flashRng() - 0.5);
+          if (tangent.lengthSq() < 1e-6) tangent.set(1, 0, 0);
+          tangent.cross(scratch).normalize().multiplyScalar(spark * (0.6 + flashRng()));
+          spawnFlash(scratch.x, scratch.y, scratch.z, 2, 1.2, tangent.x, tangent.y, tangent.z);
         }
-        const index = range.start + Math.floor(flashRng() * range.count);
-        const u = satPhase[index] + satOmega[index] * time;
-        orbitPosition(satRadius[index], satIncl[index], satRaan[index], u, scratch);
-        const collision = n >= nKill;
-        spawnFlash(scratch.x, scratch.y, scratch.z, collision ? 1 : 0, collision ? 0.62 : 0.26);
-        if (collision) {
-          const speed = 0.015;
-          for (let s = 0; s < 8; s++) {
-            tangent.set(flashRng() - 0.5, flashRng() - 0.5, flashRng() - 0.5);
-            if (tangent.lengthSq() < 1e-6) tangent.set(1, 0, 0);
-            tangent.cross(scratch).normalize().multiplyScalar(speed * (0.6 + flashRng()));
-            spawnFlash(scratch.x, scratch.y, scratch.z, 2, 1.2, tangent.x, tangent.y, tangent.z);
-          }
-        }
-        spawned += 1;
       }
     }
     for (let i = 0; i < POOL; i++) {
@@ -527,15 +623,19 @@ export function createKesslerScene(tip: HTMLElement) {
     paintClock();
   }
 
-  function apply(rows: ShellRow[], dynamics?: { area: number; kills: number[]; coll: number[] }): number {
+  function apply(rows: ShellRow[], dynamics?: { area: number; kills: number[]; coll: number[]; active: number[]; linearOk: boolean }): number {
     if (dynamics) {
       killRate.clear();
       collRate.clear();
+      workRate.clear();
+      linearOk = dynamics.linearOk;
       H_C.forEach((h, index) => {
         killRate.set(h, dynamics.kills[index] ?? 0);
         collRate.set(h, dynamics.coll[index] ?? 0);
+        workRate.set(h, (dynamics.kills[index] ?? 0) + (dynamics.active[index] ?? 0));
       });
-      satMat.uniforms.uPointSize.value = dotPx(dynamics.area);
+      pointPx = dotPx(dynamics.area);
+      satMat.uniforms.uPointSize.value = bufferPoint(pointPx);
     }
     lastRows = rows;
     const next = `${budget()}|${rows.map((row) => `${row.h}:${row.N.toExponential(4)}`).join(',')}`;
@@ -614,16 +714,18 @@ export function createKesslerScene(tip: HTMLElement) {
       camera,
       controls,
       label: 'Kessler',
+      continuous: true,
       update(dt) {
         const play = !paused;
+        setEmberGlare(0);
+        satMat.uniforms.uPointSize.value = bufferPoint(pointPx);
+        debrisMat.uniforms.uPointSize.value = bufferPoint(1.2);
         if (!play) return false;
-        time += dt;
+        const ramp = Math.min(1, (performance.now() - speedT0) / 800);
+        speed = speedFrom + (speedTarget - speedFrom) * ramp;
+        time += speed * dt;
         satMat.uniforms.uTime.value = time;
         debrisMat.uniforms.uTime.value = time;
-        const pulse = 1 + 0.15 * Math.sin(Math.PI * time);
-        let worst: (typeof shells)[number] | null = null;
-        for (const shell of shells) if (!worst || shell.row.R0 > worst.row.R0) worst = shell;
-        for (const shell of shells) shell.mat.uniforms.uPulse.value = shell === worst ? pulse : 1;
         stepFlashes(dt);
         return true;
       },
@@ -662,10 +764,12 @@ export function createKesslerScene(tip: HTMLElement) {
     },
     resetSim() {
       simDays = 0;
-      lost = 0;
+      workLost = 0;
+      debrisColl = 0;
+      tokens = 45;
       saturated = false;
       flashLife.fill(0);
-      paintClock();
+      paintClock(true);
       requestRender();
     },
     rebind() {
@@ -678,6 +782,8 @@ export function createKesslerScene(tip: HTMLElement) {
     },
     detach() {
       unbind();
+      clearBands();
+      shellGeo.dispose();
       controls.dispose();
     },
   };

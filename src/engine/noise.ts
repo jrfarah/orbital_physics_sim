@@ -98,3 +98,37 @@ export function getNoiseTexture(): DataTexture {
   texture.needsUpdate = true;
   return texture;
 }
+
+let ember: DataTexture | null = null;
+
+/** Two-channel blotch/vein map for radiator faces. Tiles keep the procedural texture. */
+export function getEmberNoise(): DataTexture {
+  if (ember) return ember;
+  ember = getNoiseTexture().clone();
+  ember.needsUpdate = true;
+  upgradeEmber();
+  return ember;
+}
+
+function upgradeEmber(): void {
+  if (typeof document === 'undefined' || !ember) return;
+  const img = new Image();
+  img.onload = () => {
+    if (!ember) return;
+    const canvas = document.createElement('canvas');
+    canvas.width = img.width;
+    canvas.height = img.height;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) return;
+    ctx.drawImage(img, 0, 0);
+    const pixels = ctx.getImageData(0, 0, img.width, img.height).data;
+    ember.image = { data: new Uint8Array(pixels), width: img.width, height: img.height };
+    ember.magFilter = LinearFilter;
+    ember.minFilter = LinearFilter;
+    ember.wrapS = RepeatWrapping;
+    ember.wrapT = RepeatWrapping;
+    ember.needsUpdate = true;
+    void import('./renderer').then((mod) => mod.requestRender());
+  };
+  img.src = `${import.meta.env.BASE_URL}textures/ember_noise.png`;
+}

@@ -22,10 +22,11 @@ import {
   makeCamera,
   reducedMotion,
   requestRender,
-  userHasOrbited,
+  setEmberGlare,
   type TabView,
 } from '../../engine/renderer';
 import { el } from '../../ui/readout';
+import { mountScaleInset } from './inset';
 
 const GOLDEN = Math.PI * (3 - Math.sqrt(5));
 const MAX = 2600;
@@ -69,6 +70,7 @@ export function createThermalScene(overlay: HTMLElement) {
   camera.position.set(30, 24, 30);
   camera.updateProjectionMatrix();
   let controls = createControls(camera, { min: 0.2, max: 1e8 });
+  controls.enablePan = false;
   controls.target.set(0, 0, 0);
 
   const hexGeo = new CylinderGeometry(1, 1, 0.08, 6);
@@ -88,9 +90,7 @@ export function createThermalScene(overlay: HTMLElement) {
   let outer = 4;
   let fade: { from: number; to: number; t0: number } | null = null;
   let zoom: Zoom | null = null;
-  let dragging = false;
-  let deferred = false;
-  let framed = false;
+  let userAdjusted = false;
 
   const chip = el('div', 'tile-chip', '1 tile = 5 m²');
   const fitBtn = el('button', 'fit-btn', 'Fit') as HTMLButtonElement;
@@ -102,28 +102,21 @@ export function createThermalScene(overlay: HTMLElement) {
   const leaderLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
   leader.append(leaderLine);
   overlay.append(leader, label, chip, fitBtn);
+  const inset = mountScaleInset(overlay);
 
   const dummy = new Object3D();
   const scratch = new Vector3();
 
   function onStart(): void {
-    dragging = true;
     zoom = null;
-  }
-  function onEnd(): void {
-    dragging = false;
-    if (deferred) {
-      deferred = false;
-      considerZoom();
-    }
+    userAdjusted = true;
   }
   function bindControls(): void {
     controls.addEventListener('start', onStart);
-    controls.addEventListener('end', onEnd);
   }
   bindControls();
 
-  function layout(next: ThermalLayout): void {
+  function layout(next: ThermalLayout, zoomOut = false): void {
     const area = Math.max(next.aTot, 1);
     const k = pickK(area, slots[shown].k);
     const slot = ensureLevel(k);
@@ -133,10 +126,13 @@ export function createThermalScene(overlay: HTMLElement) {
     fill(slot, next.aRad, area);
     const text = `1 tile = ${Math.round(slot.area).toLocaleString('en-US')} m²`;
     if (chip.textContent !== text) chip.textContent = text;
-    if (!framed) {
+    inset.setArea(area);
+    if (!userAdjusted) {
       applyDistance(distanceFor(0.75));
-      framed = overlay.clientWidth > 2;
-    } else {
+      requestAnimationFrame(() => {
+        if (!userAdjusted && overlay.clientWidth > 2) applyDistance(distanceFor(0.75));
+      });
+    } else if (zoomOut) {
       considerZoom();
     }
     requestRender();
@@ -275,20 +271,18 @@ export function createThermalScene(overlay: HTMLElement) {
     camera.far = Math.max(dist * 40, 1000);
     camera.updateProjectionMatrix();
     camera.lookAt(controls.target);
+    controls.update();
   }
 
   function considerZoom(): void {
     if (projectedFrac() <= 0.92) return;
-    if (dragging) {
-      deferred = true;
-      return;
-    }
     const dest = distanceFor(0.75);
+    const from = camera.position.length();
+    if (from >= dest * 0.98) return;
     if (zoom) {
-      zoom.to = dest;
+      zoom.to = Math.max(zoom.to, dest);
       return;
     }
-    const from = camera.position.length();
     if (Math.abs(from - dest) / dest < 0.02) return;
     if (reducedMotion()) {
       applyDistance(dest);
@@ -300,7 +294,6 @@ export function createThermalScene(overlay: HTMLElement) {
   function fit(): void {
     const dest = distanceFor(0.75);
     const from = camera.position.length();
-    deferred = false;
     if (reducedMotion() || Math.abs(from - dest) / Math.max(dest, 1e-3) < 0.02) {
       zoom = null;
       applyDistance(dest);
@@ -314,11 +307,11 @@ export function createThermalScene(overlay: HTMLElement) {
     return {
       scene,
       camera,
-      label: 'Thermal',
       get controls() {
         return controls;
       },
       update(dt) {
+        setEmberGlare(0);
         const now = performance.now();
         let live = tickSlot(slots[shown]!, now, dt);
         if (fade) {
@@ -345,10 +338,7 @@ export function createThermalScene(overlay: HTMLElement) {
           const t = Math.min(1, (now - zoom.t0) / 500);
           const e = 1 - (1 - t) ** 3;
           applyDistance(zoom.from + (zoom.to - zoom.from) * e);
-          if (t >= 1) {
-            zoom = null;
-            if (projectedFrac() > 0.93) considerZoom();
-          }
+          if (t >= 1) zoom = null;
           live = true;
         }
         return live;
@@ -358,10 +348,11 @@ export function createThermalScene(overlay: HTMLElement) {
         fit();
       },
       onResize() {
-        if (userHasOrbited(controls)) return;
+        if (userAdjusted || overlay.clientWidth < 2) return;
+        const dest = distanceFor(0.75);
+        if (camera.position.length() >= dest * 0.98) return;
         zoom = null;
-        applyDistance(distanceFor(0.75));
-        framed = true;
+        applyDistance(dest);
       },
       syncDom() {
         if (!overlay.isConnected || overlay.clientWidth < 2) return;
@@ -373,14 +364,13 @@ export function createThermalScene(overlay: HTMLElement) {
         label.hidden = !show;
         leaderLine.style.display = show ? '' : 'none';
         if (!show) return;
-        label.style.left = `${p.x + 18}px`;
-        label.style.top = `${p.y - 22}px`;
-        const box = label.getBoundingClientRect();
-        const origin = overlay.getBoundingClientRect();
+        label.style.left = '0';
+        label.style.top = '0';
+        label.style.transform = `translate3d(${p.x + 18}px, ${p.y - 22}px, 0)`;
         leaderLine.setAttribute('x1', String(p.x));
         leaderLine.setAttribute('y1', String(p.y));
-        leaderLine.setAttribute('x2', String(box.left - origin.left));
-        leaderLine.setAttribute('y2', String(box.top - origin.top + box.height / 2));
+        leaderLine.setAttribute('x2', String(p.x + 18));
+        leaderLine.setAttribute('y2', String(p.y - 14));
       },
     };
   }
@@ -399,9 +389,9 @@ export function createThermalScene(overlay: HTMLElement) {
     view,
     rebind() {
       controls.dispose();
-      const target = controls.target.clone();
       controls = createControls(camera, { min: 0.2, max: 1e8 });
-      controls.target.copy(target);
+      controls.enablePan = false;
+      controls.target.set(0, 0, 0);
       bindControls();
       controls.update();
     },

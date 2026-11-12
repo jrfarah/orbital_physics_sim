@@ -1,5 +1,6 @@
 import { ACESFilmicToneMapping, PerspectiveCamera, Scene, SRGBColorSpace, WebGLRenderer } from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { renderComposited } from './post';
 
 export interface TabView {
   scene: Scene;
@@ -10,6 +11,8 @@ export interface TabView {
   update: (dt: number) => boolean;
   /** In-flight tweens, flashes, and tile pops. Camera damping is counted separately. */
   animationCount?: () => number;
+  /** Kessler keeps the adaptive ratio. It never snaps to a full-DPR still. */
+  continuous?: boolean;
   resetView: () => void;
   onQualityDrop?: (level: number) => void;
   onResize?: () => void;
@@ -39,10 +42,24 @@ let looping = false;
 let dirty = true;
 let last = 0;
 let ratio = 1;
+let cap = 1;
+let adaptive = 1;
+let kesslerLow = false;
+const histDt = new Float64Array(180);
+const histAt = new Float64Array(180);
+const sortBuf = new Float64Array(180);
+let histI = 0;
 let quality = 0;
-let avg = 0;
 let slow = 0;
-const steps = [2, 1.5, 1.25, 1];
+let pointerDown = false;
+let quietAt = 0;
+let refined = false;
+let calm = 0;
+let costCount = 0;
+let costPos = 0;
+let emberGlare = 0;
+const costs = new Float64Array(10);
+const passStats = { calls: 0, triangles: 0 };
 const perfListeners: ((sample: PerfSample) => void)[] = [];
 
 export function subscribePerf(fn: (sample: PerfSample) => void): () => void {
@@ -75,9 +92,55 @@ export function getQualityLevel(): number {
   return quality;
 }
 
+export function getStageSize(): { width: number; height: number } {
+  return { width: sizedW, height: sizedH };
+}
+
+export function setEmberGlare(value: number): void {
+  emberGlare = value;
+}
+
+export function isPointerDown(): boolean {
+  return pointerDown;
+}
+
 function initialRatio(): number {
-  const cap = isMobile() ? 1.75 : 2;
-  return Math.min(window.devicePixelRatio || 1, cap);
+  return Math.max(1, Math.min(window.devicePixelRatio || 1, 2));
+}
+
+function floorRatio(): number {
+  const dpr = window.devicePixelRatio || 1;
+  if (dpr < 2) return 1;
+  return isMobile() ? 1.25 : 1.5;
+}
+
+function continuousRatio(): number {
+  const dpr = window.devicePixelRatio || 1;
+  if (!isMobile() && dpr >= 2) return kesslerLow ? 1.25 : 1.5;
+  return floorRatio();
+}
+
+function noteFrame(ms: number, now: number): void {
+  histDt[histI] = ms;
+  histAt[histI] = now;
+  histI = (histI + 1) % 180;
+  let n = 0;
+  for (let i = 0; i < 180; i++) {
+    if (histAt[i]! > 0 && now - histAt[i]! <= 2000) sortBuf[n++] = histDt[i]!;
+  }
+  if (n < 30) return;
+  for (let i = 1; i < n; i++) {
+    const v = sortBuf[i]!;
+    let j = i - 1;
+    while (j >= 0 && sortBuf[j]! > v) {
+      sortBuf[j + 1] = sortBuf[j]!;
+      j -= 1;
+    }
+    sortBuf[j + 1] = v;
+  }
+  const p95 = sortBuf[Math.min(n - 1, Math.floor(n * 0.95))]!;
+  if (p95 > 20) kesslerLow = true;
+  else if (p95 < 14) kesslerLow = false;
 }
 
 function applySize(): void {
@@ -102,22 +165,37 @@ export function userHasOrbited(controls: OrbitControls): boolean {
   return userMoved.get(controls) === true;
 }
 
-function dropQuality(): void {
-  let next = 1;
-  for (const s of steps) {
-    if (s < ratio - 0.01) {
-      next = s;
-      break;
-    }
+function noteCost(ms: number): void {
+  costs[costPos] = ms;
+  costPos = (costPos + 1) % 10;
+  if (costCount < 10) {
+    costCount += 1;
+    return;
   }
-  if (next >= ratio - 0.001) return;
-  ratio = next;
-  quality += 1;
-  avg = 0;
-  slow = 0;
-  applySize();
-  active?.onQualityDrop?.(quality);
-  dirty = true;
+  let sum = 0;
+  for (let i = 0; i < 10; i++) sum += costs[i]!;
+  const avg = sum / 10;
+  const floor = floorRatio();
+  if (avg > 15) {
+    adaptive = Math.max(floor, Math.round((adaptive - 0.125) * 8) / 8);
+    calm = 0;
+    costCount = 0;
+  } else if (avg < 11) {
+    calm += 1;
+    if (calm >= 30) {
+      adaptive = Math.min(cap, Math.round((adaptive + 0.125) * 8) / 8);
+      calm = 0;
+      costCount = 0;
+    }
+  } else calm = 0;
+  if (adaptive <= 1.001 && avg > 22) {
+    slow += 0.16;
+    if (slow > 2) {
+      quality += 1;
+      slow = 0;
+      active?.onQualityDrop?.(quality);
+    }
+  } else slow = 0;
 }
 
 function frame(now: number): void {
@@ -131,25 +209,54 @@ function frame(now: number): void {
   last = now;
   if (!renderer || !active) return;
   const moved = active.controls.update();
-  const anim = active.update(dt);
-  active.syncDom?.();
-  const rendered = dirty || moved || anim;
-  if (rendered) {
-    renderer.render(active.scene, active.camera);
-    dirty = false;
-    if (anim) {
-      avg = avg === 0 ? dt : avg * 0.9 + dt * 0.1;
-      if (avg > 0.022) slow += dt;
-      else slow = 0;
-      if (slow > 2) dropQuality();
+  if (active.continuous) {
+    const next = continuousRatio();
+    if (Math.abs(ratio - next) > 0.01) {
+      ratio = next;
+      applySize();
     }
   }
+  const anim = active.update(dt);
+  const motion = Boolean(active.continuous && anim) || moved || anim || pointerDown;
+  let snap = false;
+  if (!active.continuous && motion) {
+    quietAt = now;
+    refined = false;
+    const next = Math.max(floorRatio(), adaptive);
+    if (Math.abs(ratio - next) > 0.01) {
+      ratio = next;
+      applySize();
+    }
+  } else if (now - quietAt >= 150 && !refined && cap - ratio > 0.02) {
+    ratio = cap;
+    applySize();
+    refined = true;
+    snap = true;
+  }
+  const rendered = dirty || moved || anim || snap;
+  if (rendered) {
+    const t0 = performance.now();
+    if (emberGlare > 0.02) {
+      const stats = renderComposited(renderer, active.scene, active.camera, { glare: emberGlare, mobile: isMobile() });
+      passStats.calls = stats.calls;
+      passStats.triangles = stats.triangles;
+    } else {
+      renderer.render(active.scene, active.camera);
+      passStats.calls = renderer.info.render.calls;
+      passStats.triangles = renderer.info.render.triangles;
+    }
+    const cost = performance.now() - t0;
+    if (active.continuous) noteFrame(cost, now);
+    else if (motion) noteCost(cost);
+    dirty = false;
+  }
+  active.syncDom?.();
   if (perfListeners.length) {
     const info = renderer.info;
     const sample: PerfSample = {
       dtMs: dt * 1000,
-      calls: info.render.calls,
-      triangles: info.render.triangles,
+      calls: passStats.calls,
+      triangles: passStats.triangles,
       textures: info.memory.textures,
       pixelRatio: ratio,
       scene: active.label ?? 'scene',
@@ -178,9 +285,10 @@ export function mountRenderer(container: HTMLElement): void {
   host = container;
   const canvas = document.createElement('canvas');
   container.appendChild(canvas);
+  const dpr = window.devicePixelRatio || 1;
   renderer = new WebGLRenderer({
     canvas,
-    antialias: true,
+    antialias: dpr < 2 || isMobile(),
     alpha: false,
     powerPreference: 'high-performance',
   });
@@ -188,7 +296,27 @@ export function mountRenderer(container: HTMLElement): void {
   renderer.toneMapping = ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.15;
   renderer.setClearColor(0x05070c, 1);
-  ratio = initialRatio();
+  cap = initialRatio();
+  adaptive = cap;
+  ratio = cap;
+  const fade = document.createElement('div');
+  fade.id = 'stage-fade';
+  container.parentElement?.append(fade);
+  const arm = (down: boolean) => {
+    pointerDown = down;
+    if (!down) quietAt = performance.now();
+    requestRender();
+  };
+  document.addEventListener('pointerdown', (event) => {
+    const node = event.target;
+    if (node instanceof Element && node.closest('.slider, #canvas-host')) arm(true);
+  });
+  document.addEventListener('pointerup', () => {
+    if (pointerDown) arm(false);
+  });
+  document.addEventListener('pointercancel', () => {
+    if (pointerDown) arm(false);
+  });
   const overlay = document.getElementById('gl-overlay');
   const show = () => {
     if (overlay) overlay.hidden = false;
@@ -215,8 +343,26 @@ export function mountRenderer(container: HTMLElement): void {
 export function setActiveView(view: TabView): void {
   active = view;
   view.controls.enabled = true;
+  quietAt = performance.now();
+  refined = false;
+  ratio = view.continuous ? continuousRatio() : cap;
   applySize();
-  requestRender();
+  const fade = document.getElementById('stage-fade');
+  if (fade) {
+    fade.hidden = false;
+    fade.style.opacity = '1';
+  }
+  const gl = renderer;
+  const done = () => {
+    requestRender();
+    if (!fade) return;
+    fade.style.opacity = '0';
+    window.setTimeout(() => {
+      if (fade.style.opacity === '0') fade.hidden = true;
+    }, 220);
+  };
+  if (gl) void gl.compileAsync(view.scene, view.camera).then(done, done);
+  else done();
 }
 
 export function createControls(

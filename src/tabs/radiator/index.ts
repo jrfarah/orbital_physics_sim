@@ -27,30 +27,12 @@ import type { FishMode } from './fisheye';
 
 const DEG = Math.PI / 180;
 
-function placeCompareLabels(marks: { node: HTMLElement; pct: number }[], width: number): void {
-  const ordered = [...marks].sort((a, b) => a.pct - b.pct);
-  const rights: number[] = [];
-  let rows = 1;
-  for (const mark of ordered) {
-    const textWidth = Math.ceil((mark.node.textContent?.length ?? 4) * 8);
-    const half = textWidth / 2;
-    const center = Math.min(Math.max(half, (mark.pct / 100) * width), Math.max(half, width - half));
-    const left = center - half;
-    let row = rights.findIndex((right) => left > right + 8);
-    if (row < 0) {
-      row = rights.length;
-      rights.push(-1e9);
-    }
-    rights[row] = left + textWidth;
-    rows = Math.max(rows, row + 1);
-    mark.node.style.setProperty('--row', String(row));
-    mark.node.style.left = `${center}px`;
-  }
-  markHost(ordered[0]?.node)?.style.setProperty('--mark-rows', String(rows));
-}
-
-function markHost(node: HTMLElement | undefined): HTMLElement | null {
-  return node?.parentElement ?? null;
+function placeTick(tick: HTMLElement, label: HTMLElement, pct: number, width: number): void {
+  const textWidth = Math.ceil((label.textContent?.length ?? 4) * 6.4);
+  const half = textWidth / 2;
+  const center = Math.min(Math.max(half, (pct / 100) * width), Math.max(half, width - half));
+  tick.style.left = `${pct}%`;
+  label.style.left = `${center}px`;
 }
 
 export function createRadiatorTab(summary: (text: string) => void) {
@@ -75,18 +57,18 @@ export function createRadiatorTab(summary: (text: string) => void) {
   const key = card('Heat shed (both faces)');
   key.element.classList.add('hero');
   const keyNum = bigNumber(key.body);
-  const compare = el('div', 'compare');
-  const track = el('div', 'track');
-  const dot = el('div', 'dot');
-  const env = el('div', 'tick amber');
-  const ideal = el('div', 'tick dim');
-  const capThis = el('div', 'cap high', 'This');
-  const capEnv = el('div', 'cap high', '1 kW/m² estimate');
-  const capIdeal = el('div', 'cap high', '3 K-sky ideal');
+  const compare = el('div', 'compare bullet');
+  const capEnv = el('div', 'cap above', '1 kW/m² estimate');
+  const bar = el('div', 'bar');
+  const fill = el('div', 'fill');
+  const env = el('i', 'tick amber');
+  const ideal = el('i', 'tick dim');
+  bar.append(fill, env, ideal);
+  const capIdeal = el('div', 'cap below', '3 K-sky ideal');
   const sentence = el('div', 'sub');
   const warning = el('div', 'caption bad', 'Absorbing more than it sheds.');
   warning.hidden = true;
-  compare.append(track, dot, env, ideal, capThis, capEnv, capIdeal);
+  compare.append(capEnv, bar, capIdeal);
   key.body.append(keyNum.el, compare, sentence, warning);
 
   const breakdown = el('div');
@@ -210,22 +192,14 @@ export function createRadiatorTab(summary: (text: string) => void) {
     keyNum.el.classList.toggle('bad', total < 0);
     const scaleMax = Math.max(result.ideal, 1200, Math.max(total, 0));
     const at = (v: number) => Math.min(100, Math.max(0, (v / scaleMax) * 100));
-    dot.style.left = `${at(total)}%`;
-    env.style.left = `${at(content.backOfEnvelopeWm2)}%`;
-    ideal.style.left = `${at(result.ideal)}%`;
-    placeCompareLabels(
-      [
-        { node: capThis, pct: at(total) },
-        { node: capEnv, pct: at(content.backOfEnvelopeWm2) },
-        { node: capIdeal, pct: at(result.ideal) },
-      ],
-      compare.clientWidth || 300,
-    );
+    fill.style.width = `${at(Math.max(total, 0))}%`;
+    const width = compare.clientWidth || 300;
+    placeTick(env, capEnv, at(content.backOfEnvelopeWm2), width);
+    placeTick(ideal, capIdeal, at(result.ideal), width);
     const pct = Math.round((100 * total) / content.backOfEnvelopeWm2);
     const pct2 = Math.round((100 * total) / result.ideal);
-    sentence.textContent = `${pct}% of the estimate`;
+    sentence.textContent = `${pct}% of the estimate · ${pct2}% of the ideal`;
     sentence.className = 'caption';
-    void pct2;
     warning.hidden = total >= 0;
     paintFaceCard(faceA, 'A', result.A);
     paintFaceCard(faceB, 'B', result.B);

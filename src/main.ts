@@ -82,13 +82,23 @@ for (const name of ['radiator', 'thermal', 'kessler'] as const) {
 
 const takeChip = el('button', 'takeaway-chip', 'Takeaway ▸');
 takeChip.type = 'button';
-const takeText = el('p', 'takeaway-body');
-takeText.hidden = true;
+const takeCard = el('div', 'takeaway-card');
+takeCard.hidden = true;
+const takeClose = el('button', 'takeaway-x', '×');
+takeClose.type = 'button';
+takeClose.setAttribute('aria-label', 'Close takeaway');
+const takeText = el('p', 'takeaway-copy');
+takeCard.append(takeClose, takeText);
+const closeTakeaway = () => {
+  takeCard.hidden = true;
+  takeChip.hidden = false;
+};
 takeChip.addEventListener('click', () => {
-  takeText.hidden = !takeText.hidden;
-  takeChip.textContent = takeText.hidden ? 'Takeaway ▸' : 'Takeaway ▾';
+  takeCard.hidden = false;
+  takeChip.hidden = true;
 });
-takeawayEl.append(takeChip, takeText);
+takeClose.addEventListener('click', closeTakeaway);
+takeawayEl.append(takeChip, takeCard);
 
 const debug = el('div', 'heat-debug');
 debug.hidden = true;
@@ -112,8 +122,7 @@ function placeControls(tab: Tab): void {
 
 function showTakeaway(name: TabName): void {
   takeText.textContent = takeaways[name];
-  takeText.hidden = true;
-  takeChip.textContent = 'Takeaway ▸';
+  closeTakeaway();
   takeawayEl.hidden = false;
 }
 

@@ -82,6 +82,21 @@ async function audit(page) {
     for (const el of nodes) {
       if (!(el instanceof HTMLElement) && !(el instanceof SVGElement)) continue;
       if (!visible(el)) continue;
+      const extra = el.getAttribute('data-boxes');
+      if (extra) {
+        try {
+          const parsed = JSON.parse(extra);
+          const host = el.getBoundingClientRect();
+          for (const box of parsed) {
+            const rect = { x: box.x, y: box.y, w: box.w, h: box.h };
+            const outside = rect.x < host.left - 1 || rect.y < host.top - 1 || rect.x + rect.w > host.right + 1 || rect.y + rect.h > host.bottom + 1;
+            if (outside) problems.push(`clipped "${String(box.text || 'chart').slice(0, 48)}" <data-boxes>`);
+            boxes.push({ text: box.text || 'chart', rect, cls: 'data-boxes' });
+          }
+        } catch {
+          problems.push('bad data-boxes');
+        }
+      }
       const text = (el.textContent || '').trim();
       if (!text) continue;
       if ([...el.children].some((child) => (child.textContent || '').trim())) continue;
@@ -95,16 +110,8 @@ async function audit(page) {
       if (!ellipsis && el instanceof HTMLElement && style.overflowX === 'visible' && el.scrollWidth > el.clientWidth + 1) {
         problems.push(`clipped "${text.slice(0, 48)}" <${el.tagName.toLowerCase()}.${el.className}>`);
       }
+      if (el.classList?.contains('chart-label')) continue;
       boxes.push({ text: text.slice(0, 48), rect, cls: el.className });
-      const extra = el.getAttribute('data-boxes');
-      if (extra) {
-        try {
-          const parsed = JSON.parse(extra);
-          for (const box of parsed) boxes.push({ text: box.text || 'chart', rect: box, cls: 'data-boxes' });
-        } catch {
-          problems.push('bad data-boxes');
-        }
-      }
     }
     for (let i = 0; i < boxes.length; i++) {
       for (let j = i + 1; j < boxes.length; j++) {

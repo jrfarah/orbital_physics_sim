@@ -88,7 +88,7 @@ function dodgeChip(pct: number): string {
 
 function sizeChip(area: number): string {
   const across = Math.round(70 * Math.sqrt(area / 800));
-  return `${fmtArea(area)} · ${across.toLocaleString('en-US')} m across · ${fmtPower(area * W_PER_M2)}`;
+  return `${fmtArea(area)} · ${across.toLocaleString('en-US')} m`;
 }
 
 export function createKesslerTab(summary: (text: string) => void) {
@@ -202,17 +202,16 @@ export function createKesslerTab(summary: (text: string) => void) {
   );
   const area = createSlider({
     id: 'k-area',
-    label: 'Size of each satellite',
+    label: 'Satellite size',
     min: 50,
     max: 200000,
     step: 1,
     value: 116,
     scale: 'log',
     format: sizeChip,
-    sublabel: 'Starlink (116 m²) · SpaceX AI sat (800 m²)',
     marks: [
-      { value: 116, label: '' },
-      { value: 800, label: '' },
+      { value: 116, label: 'Starlink' },
+      { value: 800, label: 'SpaceX AI' },
     ],
     onInput: (v) => {
       state.area = v;
@@ -384,6 +383,22 @@ export function createKesslerTab(summary: (text: string) => void) {
     },
   });
 
+  const sizePower = el('div', 'caption');
+  const sizeNote = el('div', 'caption');
+  sizeNote.append(document.createTextNode('Bigger satellites: fewer dodges, but each lost one strands a bigger target. '));
+  const sizeInfo = el('button', 'info', 'ⓘ');
+  sizeInfo.type = 'button';
+  sizeInfo.setAttribute('aria-label', 'Why satellite size matters');
+  const sizePop = el(
+    'div',
+    'note-pop',
+    "For a fixed deployment rate, total area in orbit is fixed. Fewer, bigger satellites need fewer collision-avoidance maneuvers. But untracked debris hits the same total area just as often, and in this model each fatal hit strands a whole satellite. So the stranded area per year grows with satellite size, and the cascade factor rises. If giant satellites were modular, so a hit disables only one section, lower 'Fraction where a hit is fatal' in Advanced.",
+  );
+  sizePop.hidden = true;
+  sizeInfo.addEventListener('click', () => {
+    sizePop.hidden = !sizePop.hidden;
+  });
+  sizeNote.append(sizeInfo, sizePop);
   const controls = el('div');
   controls.append(
     el('h2', 'section-title', 'Scenarios'),
@@ -398,6 +413,8 @@ export function createKesslerTab(summary: (text: string) => void) {
     rate.element,
     rateSnaps,
     area.element,
+    sizePower,
+    sizeNote,
     preset.element,
     band.element,
     el('h2', 'section-title', 'Avoidance'),
@@ -496,7 +513,14 @@ export function createKesslerTab(summary: (text: string) => void) {
       fFrag: state.fFrag,
       coord: state.coord,
     });
-    const count = scene.apply(result.shells, { area: result.A_sat, kills: rates.kills, coll: rates.coll_total });
+    sizePower.textContent = fmtPower(state.area * W_PER_M2);
+    const count = scene.apply(result.shells, {
+      area: result.A_sat,
+      kills: rates.kills,
+      coll: rates.coll_total,
+      active: rates.coll_active,
+      linearOk: result.linear_regime_ok,
+    });
     const style = r0Style(result.R0_max);
     const status = result.R0_max < 1 ? 'Stable' : result.R0_max < 10 ? 'Past tipping point' : 'Runaway';
     bannerTitle.textContent = status;

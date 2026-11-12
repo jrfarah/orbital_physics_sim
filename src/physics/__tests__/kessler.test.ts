@@ -75,6 +75,8 @@ describe('kessler', () => {
       const rates = kesslerShellRates(input);
       expectClose(rates.kills.reduce((sum, value) => sum + value, 0), got.kills_per_yr);
       expectClose(rates.coll_total.reduce((sum, value) => sum + value, 0), got.collisions_per_yr);
+      const active = rates.kills.reduce((sum, value, i) => sum + value + (rates.coll_active[i] ?? 0), 0);
+      expectClose(active * got.cost_per_sat, got.unplanned_loss_usd_per_yr);
     }
   });
 

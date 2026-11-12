@@ -14,7 +14,7 @@ export function createThermalCharts(): {
   const aNote = el('div', 'caption');
   const bNote = el('div', 'caption');
   detail.append(el('h2', 'section-title', 'Why only a factor of a few?'), aHost, aNote);
-  element.append(el('h2', 'section-title', 'Does a heat pump help?'), bHost, bNote);
+  element.append(el('h2', 'section-title', 'Does a heat pump help?'), el('div', 'caption', 'Area needed vs. radiator temperature'), bHost, bNote);
   const chartA = createChart(aHost, 1.7);
   const chartB = createChart(bHost, 1.7);
 
@@ -60,23 +60,25 @@ export function createThermalCharts(): {
       const here = thermalBudget({ ...input, pump: true, T_hot: tHot });
       const finite = tot.filter((v) => Number.isFinite(v));
       const yMax = Math.max(base.A_tot, Number.isFinite(here.A_tot) ? here.A_tot : 0, ...(finite.length ? finite : [1])) * 1.08;
+      const dim = input.pump ? '' : '99';
       chartB.draw({
         xDomain: [cold, 600],
         yDomain: [0, yMax],
         xLabel: 'Temperature (K)',
         yLabel: 'Area (m²)',
-        legend: true,
         series: [
-          { name: 'Radiator', color: '#c5ccd6', xs: tx, ys: rad },
-          { name: 'Solar', color: '#2a5bd7', xs: tx, ys: sol },
-          { name: 'Total', color: '#5ce1ff', xs: tx, ys: tot, width: 3 },
+          { name: 'Radiators', color: `#c4341a${dim}`, xs: tx, ys: rad, endLabel: true },
+          { name: 'Solar panels', color: `#2a5bd7${dim}`, xs: tx, ys: sol, endLabel: true },
+          { name: 'Total', color: `#5ce1ff${dim}`, xs: tx, ys: tot, width: 3, endLabel: true },
         ],
-        points: [
-          { x: here.T_hot, y: here.A_tot, color: '#e6edf5', label: 'you' },
-          { x: cold, y: base.A_tot, color: '#9aa9bb', label: 'no pump' },
-        ],
+        points: input.pump
+          ? [
+              { x: here.T_hot, y: here.A_tot, color: '#e6edf5', label: 'you' },
+              { x: cold, y: base.A_tot, color: '#9aa9bb', label: 'no pump', hollow: true },
+            ]
+          : [{ x: cold, y: base.A_tot, color: '#e6edf5', label: 'you (no heat pump)' }],
       });
-      bNote.textContent = '';
+      bNote.textContent = input.pump ? '' : 'Turn on the heat pump to move along this curve';
     },
   };
 }

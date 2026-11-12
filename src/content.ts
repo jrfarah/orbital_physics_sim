@@ -48,7 +48,7 @@ export const content = {
       { parts: [{ text: 'GPU limit 90 °C and a 30 K drop from chip to radiator are illustrative defaults; adjust them.' }] },
       { parts: [{ text: 'Solar: 22% cells, 90% packing, continuous sunlight (dawn-dusk orbit), no batteries. All generous to orbital compute.' }] },
       { parts: [{ text: 'Heat pump: work = Q·(T_hot/T_cold − 1)/(fraction of Carnot).' }] },
-      { parts: [{ text: 'Reference areas: U.S. Census Bureau land areas; NYC Parks (Central Park 843 acres).' }] },
+      { parts: [{ text: 'Reference areas: U.S. Census Bureau land areas; NYC Parks (Central Park 843 acres). The OpenStreetMap fetch for Central Park and Manhattan failed, so those two insets are rounded rectangles of the published area. Rhode Island uses the Natural Earth coastline (public domain). © OpenStreetMap contributors (ODbL).' }] },
     ] as SourceItem[],
     kessler: [
       {

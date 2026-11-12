@@ -3,5 +3,7 @@ dist
 .DS_Store
 *.local
 dev-dist
-shots
+shots/*
+!shots/golden/
+!shots/golden/**
 .playwright-browsers

@@ -21,7 +21,7 @@ import {
   UnsignedByteType,
   Vector3,
 } from 'three';
-import { getRenderer, requestRender } from './renderer';
+import { getRenderer, isPointerDown, requestRender } from './renderer';
 
 export interface EarthBundle {
   group: Group;
@@ -199,6 +199,13 @@ function blank(rgb: [number, number, number], srgb: boolean): DataTexture {
   return tex;
 }
 
+const boundSize = { Day: 0, Night: 0, Clouds: 0 };
+
+export function earthTextureLine(): string {
+  const n = (value: number) => (value > 0 ? String(value) : '—');
+  return `day ${n(boundSize.Day)} · night ${n(boundSize.Night)} · clouds ${n(boundSize.Clouds)}`;
+}
+
 function anisotropy(): number {
   try {
     return getRenderer().capabilities.getMaxAnisotropy();
@@ -217,6 +224,16 @@ function prepare(tex: Texture, srgb: boolean): Texture {
   tex.wrapT = ClampToEdgeWrapping;
   tex.needsUpdate = true;
   return tex;
+}
+
+function wants8k(mobile: boolean): boolean {
+  if (mobile) return false;
+  try {
+    const mem = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
+    return getRenderer().capabilities.maxTextureSize >= 8192 && (mem === undefined || mem >= 8);
+  } catch {
+    return false;
+  }
 }
 
 function hiResNames(mobile: boolean): { day: string[]; clouds: string[]; night: string[] } {
@@ -349,10 +366,15 @@ export function createEarth(mobile: boolean): EarthBundle {
   let fadeDone = false;
 
   const bind = (slot: 'Lo' | 'Hi', key: 'Day' | 'Night' | 'Clouds', tex: Texture) => {
+    tex.anisotropy = anisotropy();
     const name = `u${key}${slot}`;
     surface.uniforms[name]!.value = tex;
     if (key === 'Clouds') clouds.uniforms[name]!.value = tex;
     owned.add(tex);
+    if (slot === 'Hi') {
+      const image = tex.image as { width?: number } | undefined;
+      boundSize[key] = image?.width ?? 0;
+    }
   };
 
   const startFade = () => {
@@ -368,6 +390,7 @@ export function createEarth(mobile: boolean): EarthBundle {
         return;
       }
       fadeDone = true;
+      if (wants8k(mobile)) scheduleFinest();
       for (const key of ['Day', 'Night', 'Clouds'] as const) {
         const tex = hi.get(key);
         if (!tex) continue;
@@ -401,6 +424,31 @@ export function createEarth(mobile: boolean): EarthBundle {
       requestRender();
     });
   });
+
+  const scheduleFinest = () => {
+    const step = () => {
+      if (isPointerDown()) {
+        const wait = window.requestIdleCallback ?? ((fn: () => void) => window.setTimeout(fn, 500));
+        wait(() => step());
+        return;
+      }
+      loader.load(
+        `${base}textures/earth_day_8k.jpg`,
+        (tex) => {
+          prepare(tex, true);
+          const gl = getRenderer() as { initTexture?: (texture: Texture) => void };
+          gl.initTexture?.(tex);
+          bind('Hi', 'Day', tex);
+          bind('Lo', 'Day', tex);
+          requestRender();
+        },
+        undefined,
+        () => undefined,
+      );
+    };
+    const wait = window.requestIdleCallback ?? ((fn: () => void) => window.setTimeout(fn, 500));
+    wait(() => step());
+  };
 
   const names = hiResNames(mobile);
   const chains = { Day: names.day, Night: names.night, Clouds: names.clouds } as const;

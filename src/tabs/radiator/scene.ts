@@ -29,7 +29,8 @@ import type { FaceFlux, RadiatorResult } from '../../physics/radiator';
 import type { Vec3 } from '../../physics/vec';
 import { createEarth } from '../../engine/earth';
 import { createHeatMaterial, setHeat, type HeatMaterial } from '../../engine/heatMaterial';
-import { clearUserOrbit, createControls, makeCamera, reducedMotion, requestRender, userHasOrbited, type TabView } from '../../engine/renderer';
+import { LAYER_EMBER } from '../../engine/post';
+import { clearUserOrbit, createControls, getStageSize, makeCamera, reducedMotion, requestRender, setEmberGlare, userHasOrbited, type TabView } from '../../engine/renderer';
 import { createStarfield, createSunSprite } from '../../engine/starfield';
 import { createLiveFisheye, type FishFace, type FishMode } from './fisheye';
 
@@ -81,8 +82,8 @@ export function createRadiatorScene(mobile: boolean, tag: HTMLElement) {
   scene.add(earth.sun);
   scene.add(earth.ambient);
 
-  const matA = createHeatMaterial(0, false, { offset: [0.13, 0.71], rotation: 0.6 });
-  const matB = createHeatMaterial(0, false, { offset: [0.58, 0.22], rotation: 2.1 });
+  const matA = createHeatMaterial(0, false, { offset: [0.13, 0.71], rotation: 0.6, scale: 0.9 });
+  const matB = createHeatMaterial(0, false, { offset: [0.58, 0.22], rotation: 2.1, scale: 1.3 });
   const edge = new MeshStandardMaterial({ color: 0x2a2e34, metalness: 0.85, roughness: 0.45, envMap: null, envMapIntensity: 0 });
   const panel = new Mesh(new BoxGeometry(0.14, 0.09, 0.006), [edge, edge, edge, edge, matA, matB]);
   const outline = new LineSegments(
@@ -122,6 +123,7 @@ export function createRadiatorScene(mobile: boolean, tag: HTMLElement) {
     obj.traverse((node) => node.layers.set(1));
   };
   only(panel);
+  panel.layers.enable(LAYER_EMBER);
   only(labelA);
   only(labelB);
   only(arrowA);
@@ -147,6 +149,8 @@ export function createRadiatorScene(mobile: boolean, tag: HTMLElement) {
   const reticle = document.createElement('div');
   reticle.className = 'reticle';
   reticle.innerHTML = '<i></i><i></i><i></i><i></i><span>Radiator</span>';
+  reticle.style.left = '0';
+  reticle.style.top = '0';
   const faceTagA = document.createElement('div');
   faceTagA.className = 'face-tag a';
   faceTagA.textContent = 'A';
@@ -269,8 +273,7 @@ export function createRadiatorScene(mobile: boolean, tag: HTMLElement) {
     const bh = Math.max(36, maxY - minY);
     const cx = (minX + maxX) / 2;
     const cy = (minY + maxY) / 2;
-    reticle.style.left = `${cx - bw / 2}px`;
-    reticle.style.top = `${cy - bh / 2}px`;
+    reticle.style.transform = `translate3d(${cx - bw / 2}px, ${cy - bh / 2}px, 0)`;
     reticle.style.width = `${bw}px`;
     reticle.style.height = `${bh}px`;
   }
@@ -279,8 +282,9 @@ export function createRadiatorScene(mobile: boolean, tag: HTMLElement) {
     const label = screenOf(world, w, h);
     const origin = screenOf(face, w, h);
     tag.hidden = label.behind;
-    tag.style.left = `${label.x}px`;
-    tag.style.top = `${label.y}px`;
+    tag.style.left = '0';
+    tag.style.top = '0';
+    tag.style.transform = `translate3d(${label.x}px, ${label.y}px, 0) translate(6px, -50%)`;
     line.setAttribute('x1', String(origin.x));
     line.setAttribute('y1', String(origin.y));
     line.setAttribute('x2', String(label.x));
@@ -313,10 +317,10 @@ export function createRadiatorScene(mobile: boolean, tag: HTMLElement) {
       syncDom() {
         rim.position.copy(camera.position);
         rim.target.position.copy(panel.position);
-        const host = canvas().parentElement;
-        if (!host) return;
-        const w = host.clientWidth;
-        const h = host.clientHeight;
+        const stage = getStageSize();
+        const w = stage.width;
+        const h = stage.height;
+        if (w < 2 || h < 2) return;
         projected.copy(panel.position).project(camera);
         tag.hidden = projected.z > 1;
         const toPanel = scratch.copy(panel.position).sub(camera.position);
@@ -405,8 +409,12 @@ export function createRadiatorScene(mobile: boolean, tag: HTMLElement) {
       panel.matrix.setPosition(pos);
       panel.matrixAutoUpdate = false;
       panel.matrixWorldNeedsUpdate = true;
-      setHeat(matA, heat01(result.A.T_sink));
-      setHeat(matB, heat01(result.B.T_sink));
+      const heatA = heat01(result.A.T_sink);
+      const heatB = heat01(result.B.T_sink);
+      setHeat(matA, heatA);
+      setHeat(matB, heatB);
+      const hottest = Math.max(heatA, heatB);
+      setEmberGlare(hottest > 0.02 ? 0.35 + 1.4 * hottest : 0);
       labelA.position.copy(pos).addScaledVector(n, 0.05);
       labelB.position.copy(pos).addScaledVector(n, -0.05);
       if (!focus && !userHasOrbited(controls)) frameCamera(false);

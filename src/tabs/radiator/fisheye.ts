@@ -19,7 +19,7 @@ import {
   Color,
   type WebGLRenderer,
 } from 'three';
-import { getRenderer, requestRender } from '../../engine/renderer';
+import { getRenderer, isPointerDown, requestRender } from '../../engine/renderer';
 import { R_E } from '../../physics/constants';
 import {
   edgeOnNormal,
@@ -82,8 +82,11 @@ function srgbByte(byte: number): number {
 class FisheyePass {
   readonly size: number;
   readonly cubeTarget: WebGLCubeRenderTarget;
+  readonly draftTarget: WebGLCubeRenderTarget;
   readonly cube: CubeCamera;
+  readonly draft: CubeCamera;
   readonly target: WebGLRenderTarget;
+  readonly pixels = new Uint8Array(256 * 256 * 4);
   readonly quadScene = new Scene();
   readonly quadCamera = new OrthographicCamera(-1, 1, 1, -1, 0, 2);
   readonly material: ShaderMaterial;
@@ -91,7 +94,11 @@ class FisheyePass {
   constructor(size: number) {
     this.size = size;
     this.cubeTarget = new WebGLCubeRenderTarget(size, { generateMipmaps: false, minFilter: LinearFilter, magFilter: LinearFilter });
+    this.draftTarget = new WebGLCubeRenderTarget(128, { generateMipmaps: false, minFilter: LinearFilter, magFilter: LinearFilter });
     this.cube = new CubeCamera(0.01, 200, this.cubeTarget);
+    this.draft = new CubeCamera(0.01, 200, this.draftTarget);
+    this.cube.layers.enable(3);
+    this.draft.layers.enable(3);
     this.target = new WebGLRenderTarget(256, 256, { minFilter: LinearFilter, magFilter: LinearFilter, format: RGBAFormat });
     this.material = new ShaderMaterial({
       uniforms: {
@@ -116,12 +123,13 @@ class FisheyePass {
     const quad = new Mesh(new PlaneGeometry(2, 2), this.material);
     this.quadScene.add(quad);
     this.quadCamera.position.set(0, 0, 1);
-    this.cube.layers.enable(3);
   }
 
-  async shoot(renderer: WebGLRenderer, scene: Scene, origin: Vector3, face: FishFace, mode: FishMode): Promise<Uint8Array> {
-    this.cube.position.copy(origin);
-    this.cube.update(renderer, scene);
+  async shoot(renderer: WebGLRenderer, scene: Scene, origin: Vector3, face: FishFace, mode: FishMode, draft = false): Promise<Uint8Array | null> {
+    const cube = draft ? this.draft : this.cube;
+    cube.position.copy(origin);
+    cube.update(renderer, scene);
+    this.material.uniforms.uCube.value = draft ? this.draftTarget.texture : this.cubeTarget.texture;
     const { t, b } = basis(face.normal, face.zenith, face.north);
     (this.material.uniforms.uN.value as Vector3).copy(face.normal);
     (this.material.uniforms.uT.value as Vector3).copy(t);
@@ -132,18 +140,22 @@ class FisheyePass {
     renderer.setClearColor(0x000000, 0);
     renderer.clear();
     renderer.render(this.quadScene, this.quadCamera);
-    const pixels = new Uint8Array(256 * 256 * 4);
     const reader = renderer as WebGLRenderer & {
       readRenderTargetPixelsAsync?: (t: WebGLRenderTarget, x: number, y: number, w: number, h: number, b: Uint8Array) => Promise<Uint8Array>;
     };
-    if (reader.readRenderTargetPixelsAsync) await reader.readRenderTargetPixelsAsync(this.target, 0, 0, 256, 256, pixels);
-    else renderer.readRenderTargetPixels(this.target, 0, 0, 256, 256, pixels);
+    if (reader.readRenderTargetPixelsAsync) await reader.readRenderTargetPixelsAsync(this.target, 0, 0, 256, 256, this.pixels);
+    else if (!draft) renderer.readRenderTargetPixels(this.target, 0, 0, 256, 256, this.pixels);
+    else {
+      renderer.setRenderTarget(prev);
+      return null;
+    }
     renderer.setRenderTarget(prev);
-    return pixels;
+    return this.pixels;
   }
 
   dispose(): void {
     this.cubeTarget.dispose();
+    this.draftTarget.dispose();
     this.target.dispose();
     this.material.dispose();
     const quad = this.quadScene.children[0] as Mesh;
@@ -219,7 +231,19 @@ export function createLiveFisheye(scene: Scene, mobile: boolean): {
   let last = 0;
   let pending: { origin: Vector3; faces: FishFace[]; mode: FishMode } | null = null;
   let busy = false;
+  let visible = true;
   const clear = new Color();
+  if (typeof IntersectionObserver !== 'undefined') {
+    const watch = new IntersectionObserver((entries) => {
+      visible = entries.some((entry) => entry.isIntersecting);
+    });
+    // The canvases are attached after this returns. Observe on the next frame.
+    requestAnimationFrame(() => {
+      const cards = document.querySelectorAll('.fisheye');
+      cards.forEach((card) => watch.observe(card));
+      if (cards.length === 0) visible = true;
+    });
+  }
 
   const placeSun = (origin: Vector3) => {
     disc.position.copy(origin).addScaledVector(sunDir, dist);
@@ -238,10 +262,11 @@ export function createLiveFisheye(scene: Scene, mobile: boolean): {
       renderer.getClearColor(clear);
       const alpha = renderer.getClearAlpha();
       placeSun(job.origin);
+      const draft = isPointerDown();
       for (const face of job.faces) {
         if (pending) break;
-        const pixels = await pass.shoot(renderer, scene, job.origin, face, job.mode);
-        if (pending) break;
+        const pixels = await pass.shoot(renderer, scene, job.origin, face, job.mode, draft);
+        if (!pixels || pending) break;
         paint(face.canvas, pixels);
       }
       renderer.setClearColor(clear, alpha);
@@ -258,6 +283,7 @@ export function createLiveFisheye(scene: Scene, mobile: boolean): {
 
   return {
     request(origin, faces, mode) {
+      if (!visible) return;
       pending = { origin: origin.clone(), faces, mode };
       const now = performance.now();
       const since = now - last;
@@ -318,7 +344,8 @@ export async function measureViewFactors(): Promise<{ name: string; face: 'A' | 
       const normal = new Vector3(nHat[0], nHat[1], nHat[2]);
       for (const face of ['A', 'B'] as const) {
         const n = face === 'A' ? normal : normal.clone().multiplyScalar(-1);
-        const pixels = await pass.shoot(renderer, scene, origin, { normal: n, zenith, north, canvas }, 'heat');
+        const pixels = await pass.shoot(renderer, scene, origin, { normal: n, zenith, north, canvas }, 'heat', false);
+        if (!pixels) continue;
         const expected = face === 'A' ? result.A.F : result.B.F;
         out.push({ name: item.name, face, got: whiteFraction(pixels), expected });
       }

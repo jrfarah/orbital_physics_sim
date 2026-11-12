@@ -5,6 +5,8 @@ export interface ChartSeries {
   ys: number[];
   dashed?: boolean;
   width?: number;
+  /** Draw the series name at the last finite point instead of in a legend. */
+  endLabel?: boolean;
 }
 
 export interface ChartSpec {
@@ -18,7 +20,7 @@ export interface ChartSpec {
   vLines?: { x: number; color: string; label?: string }[];
   hLines?: { y: number; color: string; label?: string; dashed?: boolean }[];
   shade?: { x0: number; x1: number; color: string; label?: string }[];
-  points?: { x: number; y: number; color: string; label?: string }[];
+  points?: { x: number; y: number; color: string; label?: string; hollow?: boolean }[];
   xTicks?: { value: number; label: string }[];
   bandLabels?: { x: number; label: string }[];
   clipWalls?: boolean;
@@ -120,6 +122,7 @@ export function createChart(host: HTMLElement, aspect = 1.7): { draw: (spec: Cha
         ctx.fillRect(Math.min(a, b), top, Math.abs(b - a), plotH);
       }
     }
+    const ends: { name: string; x: number; y: number; color: string }[] = [];
     ctx.save();
     ctx.beginPath();
     ctx.rect(left, top, plotW, plotH);
@@ -130,6 +133,8 @@ export function createChart(host: HTMLElement, aspect = 1.7): { draw: (spec: Cha
       ctx.lineWidth = series.width ?? 2;
       ctx.setLineDash(series.dashed ? [5, 4] : []);
       let started = false;
+      let lastX = 0;
+      let lastY = 0;
       for (let i = 0; i < series.xs.length; i++) {
         const x = series.xs[i];
         let y = series.ys[i];
@@ -144,10 +149,29 @@ export function createChart(host: HTMLElement, aspect = 1.7): { draw: (spec: Cha
           ctx.moveTo(px, py);
           started = true;
         } else ctx.lineTo(px, py);
+        lastX = px;
+        lastY = py;
       }
       ctx.stroke();
+      if (series.endLabel && started) ends.push({ name: series.name, x: lastX, y: lastY, color: series.color });
     }
     ctx.restore();
+    const boxes = [];
+    for (const end of ends) {
+      const guess = end.name.length * 6.6 + 8;
+      const x = Math.max(left + 4, Math.min(end.x, left + plotW) - guess);
+      const y = Math.max(top + 2, end.y - 16);
+      const placedOk = place(end.name, x, y, end.color, false) || place(end.name, x, Math.max(top + 2, y - 14), end.color, false);
+      if (placedOk) {
+        const box = placed[placed.length - 1]!;
+        boxes.push({ text: end.name, x: box.x, y: box.y, w: box.w, h: box.h });
+      }
+    }
+    const origin = host.getBoundingClientRect();
+    host.setAttribute(
+      'data-boxes',
+      JSON.stringify(boxes.map((box) => ({ text: box.text, x: origin.left + box.x, y: origin.top + box.y, w: box.w, h: box.h }))),
+    );
     ctx.setLineDash([]);
     if (spec.vLines) {
       for (const line of spec.vLines) {
@@ -184,10 +208,16 @@ export function createChart(host: HTMLElement, aspect = 1.7): { draw: (spec: Cha
       for (const point of spec.points) {
         const px = xOf(point.x);
         const py = yOf(point.y);
-        ctx.fillStyle = point.color;
         ctx.beginPath();
         ctx.arc(px, py, 4, 0, Math.PI * 2);
-        ctx.fill();
+        if (point.hollow) {
+          ctx.strokeStyle = point.color;
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+        } else {
+          ctx.fillStyle = point.color;
+          ctx.fill();
+        }
         if (!point.label) continue;
         const spots: [number, number][] = [
           [px + 8, py - 16],
