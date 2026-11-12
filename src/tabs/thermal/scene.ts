@@ -14,6 +14,7 @@ import {
   Object3D,
   DynamicDrawUsage,
   Scene,
+  WebGLRenderTarget,
   Vector2,
   Vector3,
 } from 'three';
@@ -22,11 +23,14 @@ import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import { CSS2DObject, CSS2DRenderer } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
 import { createEmberMaterial, createSolarMaterial, setDither, setHeat, setTilePx, type HeatMaterial } from '../../engine/heatMaterial';
-import { LAYER_EMBER } from '../../engine/post';
+import { span } from '../../engine/marks';
+import { holdMotion } from '../../engine/motion';
+import { LAYER_EMBER, prewarmBloom } from '../../engine/post';
 import {
   clearUserOrbit,
   createControls,
   getRenderer,
+  isMobile,
   makeCamera,
   reducedMotion,
   requestRender,
@@ -34,7 +38,16 @@ import {
   type TabView,
 } from '../../engine/renderer';
 import { el } from '../../ui/readout';
+import { createConstellationMesh } from './constellation';
 import { mountScaleInset } from './inset';
+
+const RING_SEGMENTS = 96;
+const UNIT_RING = new Float32Array((RING_SEGMENTS + 1) * 3);
+for (let s = 0; s <= RING_SEGMENTS; s++) {
+  const angle = (s / RING_SEGMENTS) * Math.PI * 2;
+  UNIT_RING[s * 3] = Math.cos(angle);
+  UNIT_RING[s * 3 + 2] = Math.sin(angle);
+}
 
 const GOLDEN = Math.PI * (3 - Math.sqrt(5));
 const MAX = 2600;
@@ -151,7 +164,9 @@ export function createThermalScene(overlay: HTMLElement) {
       depthTest: false,
       depthWrite: false,
     });
+    geometry.setPositions(UNIT_RING);
     const line = new Line2(geometry, material);
+    line.position.y = 0.04;
     line.frustumCulled = false;
     line.renderOrder = 10;
     line.visible = false;
@@ -170,7 +185,7 @@ export function createThermalScene(overlay: HTMLElement) {
   const scratch = new Vector3();
 
   function onStart(): void {
-    zoom = null;
+    setZoom(null);
     userAdjusted = true;
   }
   function fitClip(force = false): void {
@@ -186,26 +201,37 @@ export function createThermalScene(overlay: HTMLElement) {
   }
   bindControls();
 
+  function setZoom(next: Zoom | null): void {
+    const had = zoom !== null;
+    zoom = next;
+    if (had !== (zoom !== null)) holdMotion(zoom !== null);
+  }
+  function setFade(next: { from: number; to: number; t0: number } | null): void {
+    const had = fade !== null;
+    fade = next;
+    if (had !== (fade !== null)) holdMotion(fade !== null);
+  }
+
   function layout(next: ThermalLayout, drag = false, follow: 'fit' | 'track' | 'out' | 'auto' = 'auto'): void {
     const area = Math.max(next.aTot, 1);
     lastRad = next.aRad;
     lastTot = area;
     const k = pickK(area, slots[shown]!.k);
-    const slot = ensureLevel(k, drag, follow === 'track');
+    const slot = span('level switch', () => ensureLevel(k, drag, follow === 'track'));
     const heat = Math.min(1, Math.max(0, (next.tHot - 1) / 649));
     emberHeat = heat;
     setHeat(slots[0]!.mat, heat);
     setHeat(slots[1]!.mat, heat);
-    fill(slot, next.aRad, area);
+    span('tile attribute writes', () => fill(slot, next.aRad, area));
     const text = `1 tile = ${Math.round(slot.area).toLocaleString('en-US')} m²`;
     if (chip.textContent !== text) {
       chip.textContent = text;
       chip.classList.add('flash');
       window.setTimeout(() => chip.classList.remove('flash'), 200);
     }
-    inset.setArea(area);
+    span('inset update', () => inset.setArea(area));
     if (follow === 'track') {
-      zoom = null;
+      setZoom(null);
       applyDistance(distanceFor(0.75));
     } else if (follow === 'fit' || (follow === 'auto' && !userAdjusted && !drag)) {
       applyDistance(distanceFor(0.75));
@@ -232,7 +258,7 @@ export function createThermalScene(overlay: HTMLElement) {
           old.hotOn.fill(0);
           setSlotDither(incoming, 'off', 1);
           setSlotDither(old, 'off', 1);
-          fade = null;
+          setFade(null);
         }
         queuedK = -1;
         return slots[shown]!;
@@ -295,10 +321,10 @@ export function createThermalScene(overlay: HTMLElement) {
       shown = next;
       setSlotDither(back, 'off', 1);
       setSlotDither(front, 'off', 1);
-      fade = null;
+      setFade(null);
       return back;
     }
-    fade = { from: shown, to: next, t0: performance.now() };
+    setFade({ from: shown, to: next, t0: performance.now() });
     shown = next;
     setSlotDither(back, 'in', 0);
     setSlotDither(front, 'out', 0);
@@ -368,15 +394,36 @@ export function createThermalScene(overlay: HTMLElement) {
     slot.hot.push(index);
   }
 
+  const matrixCache: Float32Array[] = [];
+  function matricesFor(k: number): Float32Array {
+    const cached = matrixCache[k];
+    if (cached) return cached;
+    const area = 5 * 10 ** k;
+    const c = Math.sqrt((1.25 * area) / Math.PI);
+    const buf = new Float32Array(MAX * 16);
+    for (let i = 0; i < MAX; i++) {
+      const theta = i * GOLDEN;
+      const rho = c * Math.sqrt(i + 0.5);
+      dummy.position.set(Math.cos(theta) * rho, 0.02, Math.sin(theta) * rho);
+      dummy.rotation.set(0, 0, 0);
+      dummy.scale.set(1, 1, 1);
+      dummy.updateMatrix();
+      buf.set(dummy.matrix.elements, i * 16);
+    }
+    matrixCache[k] = buf;
+    return buf;
+  }
+
   function place(slot: Slot, index: number): void {
-    const theta = index * GOLDEN;
-    const rho = slot.c * Math.sqrt(index + 0.5);
-    dummy.position.set(Math.cos(theta) * rho, 0.02, Math.sin(theta) * rho);
-    dummy.rotation.set(0, 0, 0);
-    dummy.scale.set(1, 1, 1);
-    dummy.updateMatrix();
-    slot.mesh.setMatrixAt(index, dummy.matrix);
-    slot.solar.setMatrixAt(index, dummy.matrix);
+    const src = matricesFor(slot.k);
+    const emberArray = slot.mesh.instanceMatrix.array as Float32Array;
+    const solarArray = slot.solar.instanceMatrix.array as Float32Array;
+    const offset = index * 16;
+    for (let n = 0; n < 16; n++) {
+      const value = src[offset + n]!;
+      emberArray[offset + n] = value;
+      solarArray[offset + n] = value;
+    }
   }
 
   function pop(slot: Slot, index: number, now: number): number {
@@ -483,17 +530,17 @@ export function createThermalScene(overlay: HTMLElement) {
       applyDistance(dest);
       return;
     }
-    zoom = { from, to: dest, t0: performance.now() };
+    setZoom({ from, to: dest, t0: performance.now() });
   }
 
   function fit(): void {
     const dest = distanceFor(0.75);
     const from = camera.position.length();
     if (reducedMotion() || Math.abs(from - dest) / Math.max(dest, 1e-3) < 0.02) {
-      zoom = null;
+      setZoom(null);
       applyDistance(dest);
     } else {
-      zoom = { from, to: dest, t0: performance.now() };
+      setZoom({ from, to: dest, t0: performance.now() });
     }
     requestRender();
   }
@@ -527,7 +574,7 @@ export function createThermalScene(overlay: HTMLElement) {
             setSlotDither(other, 'off', 1);
             setSlotDither(slots[fade.to]!, 'off', 1);
             const front = slots[fade.to]!;
-            fade = null;
+            setFade(null);
             if (queuedK >= 0 && queuedK !== front.k) {
               const nextK = queuedK;
               queuedK = -1;
@@ -548,7 +595,7 @@ export function createThermalScene(overlay: HTMLElement) {
           const t = Math.min(1, (now - zoom.t0) / 500);
           const e = 1 - (1 - t) ** 3;
           applyDistance(zoom.from + (zoom.to - zoom.from) * e);
-          if (t >= 1) zoom = null;
+          if (t >= 1) setZoom(null);
           live = true;
           reasons.push('auto-zoom');
         }
@@ -571,7 +618,7 @@ export function createThermalScene(overlay: HTMLElement) {
         if (userAdjusted || overlay.clientWidth < 2) return;
         const dest = distanceFor(0.75);
         if (camera.position.length() >= dest * 0.98) return;
-        zoom = null;
+        setZoom(null);
         applyDistance(dest);
       },
       syncDom() {
@@ -592,8 +639,10 @@ export function createThermalScene(overlay: HTMLElement) {
           leaderLine.setAttribute('y2', String(center.y - 14));
         }
         updateScaleBar();
-        css2d.setSize(overlay.clientWidth, overlay.clientHeight);
-        css2d.render(scene, camera);
+        span('label updates', () => {
+          css2d.setSize(overlay.clientWidth, overlay.clientHeight);
+          css2d.render(scene, camera);
+        });
       },
     };
   }
@@ -670,18 +719,8 @@ export function createThermalScene(overlay: HTMLElement) {
       slot.label3.position.set(ring.radius, 0.04, 0);
       slot.label3.visible = true;
       slot.line.visible = true;
-      if (Math.abs(slot.radius - ring.radius) / Math.max(ring.radius, 1) > 0.001) {
-        const segments = 96;
-        const positions = new Float32Array((segments + 1) * 3);
-        for (let s = 0; s <= segments; s++) {
-          const angle = (s / segments) * Math.PI * 2;
-          positions[s * 3] = Math.cos(angle) * ring.radius;
-          positions[s * 3 + 1] = 0.04;
-          positions[s * 3 + 2] = Math.sin(angle) * ring.radius;
-        }
-        slot.geometry.setPositions(positions);
-        slot.radius = ring.radius;
-      }
+      slot.line.scale.set(ring.radius, 1, ring.radius);
+      slot.radius = ring.radius;
     }
     requestRender();
   }
@@ -695,9 +734,81 @@ export function createThermalScene(overlay: HTMLElement) {
     };
   }
 
+  let warmed = false;
+  function prewarm(): void {
+    const renderer = getRenderer();
+    for (let k = 0; k <= 8; k++) matricesFor(k);
+    if (!warmed) {
+      warmed = true;
+      const rt = new WebGLRenderTarget(64, 64);
+      const warmScene = new Scene();
+      const constellation = createConstellationMesh();
+      constellation.visible = true;
+      warmScene.add(constellation);
+      const prev = renderer.getRenderTarget();
+      renderer.compile(scene, camera);
+      renderer.compile(warmScene, camera);
+      void renderer.compileAsync(scene, camera);
+      void renderer.compileAsync(warmScene, camera);
+      for (let k = 0; k <= 8; k++) {
+        const slot = slots[k % 2]!;
+        prepareSlot(slot, k);
+        const src = matricesFor(k);
+        (slot.mesh.instanceMatrix.array as Float32Array).set(src);
+        (slot.solar.instanceMatrix.array as Float32Array).set(src);
+        slot.mesh.instanceMatrix.needsUpdate = true;
+        slot.solar.instanceMatrix.needsUpdate = true;
+        slot.mesh.instanceMatrix.clearUpdateRanges();
+        slot.solar.instanceMatrix.clearUpdateRanges();
+        slot.mesh.count = 4;
+        slot.solar.count = 4;
+        setSlotDither(slot, k % 2 === 0 ? 'in' : 'out', 0.5);
+        for (const ring of ringSlots) {
+          ring.line.visible = true;
+          ring.line.scale.set(1, 1, 1);
+        }
+        renderer.setRenderTarget(rt);
+        renderer.render(scene, camera);
+      }
+      renderer.setRenderTarget(rt);
+      renderer.render(warmScene, camera);
+      renderer.setRenderTarget(prev);
+      for (const slot of slots) {
+        prepareSlot(slot, 0);
+        slot.k = -1;
+        slot.mesh.count = 0;
+        slot.solar.count = 0;
+        setSlotDither(slot, 'off', 1);
+      }
+      for (const ring of ringSlots) {
+        ring.line.visible = false;
+        ring.radius = -1;
+      }
+      rt.dispose();
+      constellation.geometry.dispose();
+      prewarmBloom(renderer, isMobile());
+    }
+    let idleK = 0;
+    const step = (deadline?: { timeRemaining: () => number }) => {
+      const budget = Math.min(8, deadline?.timeRemaining() ?? 8);
+      const t0 = performance.now();
+      while (idleK <= 8 && performance.now() - t0 < budget) {
+        matricesFor(idleK);
+        idleK += 1;
+      }
+      if (idleK <= 8) {
+        if (typeof requestIdleCallback === 'function') requestIdleCallback((next) => step(next));
+        else window.setTimeout(() => step(), 32);
+      }
+    };
+    if (typeof requestIdleCallback === 'function') requestIdleCallback((deadline) => step(deadline));
+    else window.setTimeout(() => step(), 32);
+  }
+
   return {
     layout,
     setRings,
+    prewarm,
     finishInset() {
       inset.commit();
     },

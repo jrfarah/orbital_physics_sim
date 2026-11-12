@@ -19,6 +19,7 @@ import {
   Color,
   type WebGLRenderer,
 } from 'three';
+import { presenterOn, subscribePresenter } from '../../engine/presenter';
 import { getRenderer, isPointerDown, requestRender } from '../../engine/renderer';
 import { R_E } from '../../physics/constants';
 import {
@@ -202,9 +203,18 @@ export function whiteFraction(pixels: Uint8Array): number {
 
 export function createLiveFisheye(scene: Scene, mobile: boolean): {
   request: (origin: Vector3, faces: FishFace[], mode: FishMode) => void;
+  pause: () => void;
+  resume: () => void;
   dispose: () => void;
 } {
-  const pass = new FisheyePass(mobile ? 128 : 256);
+  const cubeSize = () => (mobile || presenterOn() ? 128 : 256);
+  let pass = new FisheyePass(cubeSize());
+  subscribePresenter(() => {
+    const next = cubeSize();
+    if (pass.size === next) return;
+    pass.dispose();
+    pass = new FisheyePass(next);
+  });
   const sunDir = new Vector3(1, 0, 0);
   const dist = 50;
   const disc = new Mesh(
@@ -229,6 +239,7 @@ export function createLiveFisheye(scene: Scene, mobile: boolean): {
 
   let timer = 0;
   let last = 0;
+  let running = true;
   let pending: { origin: Vector3; faces: FishFace[]; mode: FishMode } | null = null;
   let busy = false;
   let visible = true;
@@ -283,7 +294,7 @@ export function createLiveFisheye(scene: Scene, mobile: boolean): {
 
   return {
     request(origin, faces, mode) {
-      if (!visible) return;
+      if (!visible || !running) return;
       pending = { origin: origin.clone(), faces, mode };
       const now = performance.now();
       const since = now - last;
@@ -302,6 +313,15 @@ export function createLiveFisheye(scene: Scene, mobile: boolean): {
         pending = null;
         if (job) void run(job);
       }, Math.max(0, 100 - since));
+    },
+    pause() {
+      running = false;
+      pending = null;
+      window.clearTimeout(timer);
+      timer = 0;
+    },
+    resume() {
+      running = true;
     },
     dispose() {
       window.clearTimeout(timer);

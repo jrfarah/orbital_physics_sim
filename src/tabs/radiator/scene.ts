@@ -341,6 +341,7 @@ export function createRadiatorScene(mobile: boolean, tag: HTMLElement) {
   return {
     view,
     rebind() {
+      fisheye.resume();
       controls.dispose();
       const target = controls.target.clone();
       controls = createControls(camera, { min: 0.45, max: 12 });
@@ -349,6 +350,7 @@ export function createRadiatorScene(mobile: boolean, tag: HTMLElement) {
       controls.update();
     },
     detach() {
+      fisheye.pause();
       controls.dispose();
     },
     setDrag(on: boolean, cb: (phi: number, theta: number) => void) {

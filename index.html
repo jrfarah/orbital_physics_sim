@@ -11,12 +11,27 @@
       <header id="topbar">
         <h1 id="site-title"></h1>
         <nav id="tabbar" aria-label="Sections"></nav>
+        <div id="top-tools">
+          <button id="settings" type="button" aria-label="Settings" aria-expanded="false" aria-controls="settings-pop">
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+              <circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.7" />
+              <path fill="none" stroke="currentColor" stroke-width="1.7" d="M12 3.5v2.2M12 18.3v2.2M3.5 12h2.2M18.3 12h2.2M6.1 6.1l1.6 1.6M16.3 16.3l1.6 1.6M17.9 6.1l-1.6 1.6M7.7 16.3l-1.6 1.6" />
+            </svg>
+          </button>
+          <div id="settings-pop" hidden>
+            <label class="settings-row">
+              <input id="presenter-toggle" type="checkbox" />
+              Presenter mode
+            </label>
+            <p>Steadier frames on battery. Caps resolution, bloom, and the busiest effects.</p>
+          </div>
         <button id="copy-link" type="button" aria-label="Copy link">
           <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
             <path fill="none" stroke="currentColor" stroke-width="1.7" d="M10 13a5 5 0 0 0 7.1.1l1.4-1.4a5 5 0 0 0-7.1-7.1L10 6" />
             <path fill="none" stroke="currentColor" stroke-width="1.7" d="M14 11a5 5 0 0 0-7.1-.1L5.5 12.3a5 5 0 0 0 7.1 7.1L14 18" />
           </svg>
         </button>
+        </div>
       </header>
       <div id="shell">
         <aside id="hud"></aside>

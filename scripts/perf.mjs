@@ -16,10 +16,13 @@ const preview = spawn('npx', ['vite', 'preview', '--host', '127.0.0.1', '--port'
 });
 const browser = await chromium.launch({ channel: 'chrome' });
 const sweepOnly = process.argv.includes('--sweep');
-const report = { desktop: {}, mobile: {}, thermalSweep: null };
+const chipsOnly = process.argv.includes('--chips');
+const report = { desktop: {}, mobile: {}, thermalSweep: null, chips: null };
 try {
   await waitFor(`http://127.0.0.1:${port}/`);
-  if (sweepOnly) {
+  if (chipsOnly) {
+    report.chips = await chipRuns(browser, `http://127.0.0.1:${port}`);
+  } else if (sweepOnly) {
     report.thermalSweep = await thermalSweep(browser, `http://127.0.0.1:${port}`);
   } else {
     report.desktop = await profile(browser, `http://127.0.0.1:${port}`, {
@@ -37,8 +40,8 @@ try {
   preview.kill('SIGTERM');
 }
 
-if (sweepOnly) {
-  console.log(JSON.stringify(report.thermalSweep, null, 2));
+if (sweepOnly || chipsOnly) {
+  console.log(JSON.stringify(chipsOnly ? report.chips : report.thermalSweep, null, 2));
   process.exit(0);
 }
 await mkdir(new URL('../perf/', import.meta.url), { recursive: true });
@@ -56,6 +59,119 @@ existing[phase] = {
 };
 await writeFile(outPath, `${JSON.stringify(existing, null, 2)}\n`);
 console.log(JSON.stringify(existing[phase], null, 2));
+
+function frameStats(frames) {
+  const ordered = frames.slice().sort((a, b) => a - b);
+  const pick = (p) => (ordered.length ? ordered[Math.min(ordered.length - 1, Math.floor(p * (ordered.length - 1)))] : 0);
+  return {
+    frames: ordered.length,
+    p50: round(pick(0.5)),
+    p95: round(pick(0.95)),
+    max: round(ordered.length ? ordered[ordered.length - 1] : 0),
+  };
+}
+
+function tallyStalls(stalls) {
+  const counts = new Map();
+  for (const hit of [...(stalls.slow || []), ...(stalls.longs || [])]) {
+    for (const name of hit.names || []) {
+      const key = name.split(':')[0];
+      const ms = Number(name.split(':')[1]) || hit.ms;
+      const row = counts.get(key) || { name: key, hits: 0, ms: 0 };
+      row.hits += 1;
+      row.ms += ms;
+      counts.set(key, row);
+    }
+  }
+  return [...counts.values()].sort((a, b) => b.ms - a.ms).slice(0, 8);
+}
+
+async function chipPass(page) {
+  await page.evaluate(() => {
+    const w = window;
+    w.__stallsReset?.();
+    w.__costs = [];
+    if (w.__raf) cancelAnimationFrame(w.__raf);
+    w.__frames = [];
+    let last = performance.now();
+    const loop = (now) => {
+      w.__frames.push(now - last);
+      last = now;
+      w.__raf = requestAnimationFrame(loop);
+    };
+    w.__raf = requestAnimationFrame(loop);
+  });
+  for (const name of ['1 TW', '120 kW']) {
+    await page.getByRole('button', { name, exact: true }).click();
+    await page.waitForTimeout(3400);
+  }
+  return page.evaluate(() => {
+    const w = window;
+    if (w.__raf) cancelAnimationFrame(w.__raf);
+    const frames = (w.__frames || []).filter((ms) => ms > 0 && ms < 500);
+    const stalls = typeof w.__stalls === 'function' ? w.__stalls() : { slow: [], longs: [] };
+    return { frames, costs: w.__costs || [], stalls };
+  });
+}
+
+async function chipContext(browser, origin, presenter) {
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 2 });
+  const page = await context.newPage();
+  if (presenter) await page.addInitScript(() => localStorage.setItem('presenter', '1'));
+  const cdp = await context.newCDPSession(page);
+  const traceHits = [];
+  cdp.on('Tracing.dataCollected', (event) => {
+    for (const row of event.value) {
+      const ms = (row.dur || 0) / 1000;
+      if (ms < 20) continue;
+      traceHits.push({ name: row.name || '?', cat: row.cat || '', ms: Math.round(ms * 10) / 10 });
+    }
+  });
+  await page.goto(`${origin}/#/thermal?perf=1`, { waitUntil: 'load' });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await cdp.send('Emulation.setDeviceMetricsOverride', {
+    width: 1440,
+    height: 900,
+    deviceScaleFactor: 2,
+    mobile: false,
+  });
+  await page.waitForSelector('#canvas-host canvas');
+  await page.waitForTimeout(400);
+  await cdp.send('Tracing.start', {
+    categories: 'devtools.timeline,disabled-by-default-devtools.timeline,gpu,blink',
+  });
+  const coldRaw = await chipPass(page);
+  const warmRaw = await chipPass(page);
+  await cdp.send('Tracing.end');
+  await new Promise((resolve) => {
+    cdp.once('Tracing.tracingComplete', resolve);
+    setTimeout(resolve, 1500);
+  });
+  await context.close();
+  const traceTop = [...traceHits.reduce((map, hit) => {
+    const row = map.get(hit.name) || { name: hit.name, cat: hit.cat, hits: 0, ms: 0 };
+    row.hits += 1;
+    row.ms += hit.ms;
+    map.set(hit.name, row);
+    return map;
+  }, new Map()).values()].sort((a, b) => b.ms - a.ms).slice(0, 12);
+  const pack = (raw) => ({
+    frames: frameStats(raw.frames),
+    cost: frameStats(raw.costs || []),
+    slowFrames: (raw.stalls.slow || []).length,
+    longTasks: (raw.stalls.longs || []).length,
+    culprits: tallyStalls(raw.stalls),
+    slow: (raw.stalls.slow || []).slice(0, 8),
+    longs: raw.stalls.longs || [],
+  });
+  return { cold: pack(coldRaw), warm: pack(warmRaw), traceTop };
+}
+
+async function chipRuns(browser, origin) {
+  const desktop = await chipContext(browser, origin, false);
+  const presenter = await chipContext(browser, origin, true);
+  return { desktop, presenter };
+}
 
 async function thermalSweep(browser, origin) {
   const options = { viewport: { width: 1440, height: 900 }, deviceScaleFactor: 2 };

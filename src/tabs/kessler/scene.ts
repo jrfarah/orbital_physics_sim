@@ -17,6 +17,7 @@ import { Scene } from 'three';
 import { R_E } from '../../physics/constants';
 import { H_C, SHAPE, V_SH, type ShellRow } from '../../physics/kessler';
 import { createEarth } from '../../engine/earth';
+import { presenterOn } from '../../engine/presenter';
 import { clearUserOrbit, createControls, getRenderer, isMobile, makeCamera, reducedMotion, requestRender, setEmberGlare, type TabView } from '../../engine/renderer';
 import { createStarfield, createSunSprite } from '../../engine/starfield';
 import { r0Style } from './gauges';
@@ -253,6 +254,7 @@ export function createKesslerScene(tip: HTMLElement) {
   controls.update();
 
   let paused = reducedMotion();
+  let live = false;
   let showDebris = true;
   let time = 0;
   let quality = 0;
@@ -571,7 +573,8 @@ export function createKesslerScene(tip: HTMLElement) {
     }
     const expected = workFrame + collFrame;
     const trueRate = dt > 0 ? expected / dt : 0;
-    tokens = Math.min(45, tokens + 45 * dt);
+    const flashCap = presenterOn() ? 30 : 45;
+    tokens = Math.min(flashCap, tokens + flashCap * dt);
     const draw = Math.min(Math.floor(tokens), poisson(Math.min(expected, tokens), flashRng));
     tokens -= draw;
     saturated = trueRate > 45;
@@ -716,6 +719,9 @@ export function createKesslerScene(tip: HTMLElement) {
       label: 'Kessler',
       continuous: true,
       update(dt) {
+        if (!live) return false;
+        const view = window as Window & { __kesslerSteps?: number };
+        view.__kesslerSteps = (view.__kesslerSteps ?? 0) + 1;
         const play = !paused;
         setEmberGlare(0);
         satMat.uniforms.uPointSize.value = bufferPoint(pointPx);
@@ -773,6 +779,7 @@ export function createKesslerScene(tip: HTMLElement) {
       requestRender();
     },
     rebind() {
+      live = true;
       controls.dispose();
       const target = controls.target.clone();
       controls = createControls(camera, { min: 1.3, max: 12 });
@@ -781,6 +788,7 @@ export function createKesslerScene(tip: HTMLElement) {
       bind();
     },
     detach() {
+      live = false;
       unbind();
       clearBands();
       shellGeo.dispose();

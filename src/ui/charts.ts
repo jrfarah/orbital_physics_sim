@@ -239,7 +239,10 @@ export function createChart(host: HTMLElement, aspect = 1.7): { draw: (spec: Cha
     if (spec.xLabel) place(spec.xLabel, left, height - 14, token('--text-dim'));
     if (spec.yLabel) place(spec.yLabel, left, 2, token('--text-dim'));
   };
-  const observer = new ResizeObserver(() => drawNow());
+  const observer = new ResizeObserver(() => {
+    if (!host.isConnected) return;
+    drawNow();
+  });
   observer.observe(host);
   return {
     draw(next) {

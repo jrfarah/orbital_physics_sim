@@ -235,6 +235,22 @@ export function mountScaleInset(overlay: HTMLElement): { setArea: (m2: number) =
   overlay.append(card);
 
   const lengths = new Map<string, number>();
+  const probe = svgEl<SVGSVGElement>('svg');
+  probe.setAttribute('width', '240');
+  probe.setAttribute('height', '170');
+  probe.style.position = 'absolute';
+  probe.style.visibility = 'hidden';
+  document.body.append(probe);
+  for (const shape of refs) {
+    shape.ordered.forEach((item, index) => {
+      if (!item.d) return;
+      const path = svgEl<SVGPathElement>('path');
+      path.setAttribute('d', item.d);
+      probe.append(path);
+      lengths.set(`${shape.id}:${index}`, path.getTotalLength() || 1);
+    });
+  }
+  probe.remove();
   let shown: Shape | null = null;
   let pending: Shape | null = null;
   let pendingAt = 0;
@@ -243,6 +259,7 @@ export function mountScaleInset(overlay: HTMLElement): { setArea: (m2: number) =
   let raf = 0;
   let shownScale = -1;
   let shownR = -1;
+  let drawnAt = 0;
   let drawnId = '';
   let lastMobile: boolean | null = null;
   let lastArrayText = '';
@@ -303,6 +320,7 @@ export function mountScaleInset(overlay: HTMLElement): { setArea: (m2: number) =
   };
 
   const draw = () => {
+    if (!svg.isConnected) return;
     const mobile = window.matchMedia('(max-width: 899px)').matches;
     const w = mobile ? 180 : 240;
     const h = mobile ? 130 : 170;
@@ -323,6 +341,9 @@ export function mountScaleInset(overlay: HTMLElement): { setArea: (m2: number) =
       refLabel.setAttribute('textLength', String(labelW));
     }
     const now = performance.now();
+    const dt = drawnAt === 0 ? 1 / 60 : Math.min(0.05, (now - drawnAt) / 1000);
+    drawnAt = now;
+    const blend = 1 - Math.exp(-dt / 0.0387);
     const fade = fading ? Math.min(1, (now - fading.t0) / 300) : 1;
     const current = fading?.to ?? shown ?? refs[0]!;
     const previous = fading && fade < 1 ? fading.from : null;
@@ -336,9 +357,9 @@ export function mountScaleInset(overlay: HTMLElement): { setArea: (m2: number) =
     const stacked = Math.min(content.w / Math.max(targetBox.w, refBox.w), (content.h - gap) / (targetBox.h + refBox.h));
     const scale = Math.max(side, stacked);
     if (shownScale < 0) shownScale = scale;
-    else shownScale += (scale - shownScale) * 0.35;
+    else shownScale += (scale - shownScale) * blend;
     if (shownR < 0) shownR = r;
-    else shownR += (r - shownR) * 0.35;
+    else shownR += (r - shownR) * blend;
     const arrayBox = { w: shownR * 2, h: shownR * 2 };
     const sideNow = Math.min((content.w - gap) / (arrayBox.w + refBox.w), content.h / Math.max(arrayBox.h, refBox.h));
     const stackedNow = Math.min(content.w / Math.max(arrayBox.w, refBox.w), (content.h - gap) / (arrayBox.h + refBox.h));

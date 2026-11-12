@@ -15,6 +15,8 @@ import {
   type WebGLRenderer,
 } from 'three';
 import { bloomOnly } from './heatMaterial';
+import { motionHeld } from './motion';
+import { presenterOn } from './presenter';
 
 export const LAYER_EMBER = 2;
 
@@ -41,8 +43,11 @@ function target(w: number, h: number, float: boolean): WebGLRenderTarget {
 let ember: WebGLRenderTarget | null = null;
 let blurA: WebGLRenderTarget | null = null;
 let blurB: WebGLRenderTarget | null = null;
-let cw = 0;
-let ch = 0;
+let divNow = 0;
+
+function bloomDiv(mobile: boolean): number {
+  return mobile || presenterOn() ? 8 : 4;
+}
 
 const blurMat = new ShaderMaterial({
   uniforms: { uMap: { value: null }, uDir: { value: new Vector2(1, 0) }, uTexel: { value: new Vector2() } },
@@ -106,6 +111,38 @@ function blur(renderer: WebGLRenderer, source: WebGLRenderTarget, dest: WebGLRen
   renderer.render(pass, ortho);
 }
 
+function ensureTargets(w: number, h: number, div: number): { viewW: number; viewH: number } {
+  const bw = Math.max(1, Math.floor(w / div));
+  const bh = Math.max(1, Math.floor(h / div));
+  const held = motionHeld();
+  const grow = !ember || !blurA || !blurB || bw > ember.width || bh > ember.height || div !== divNow;
+  if (!held && grow) {
+    ember = fit(ember, bw, bh, true);
+    blurA = fit(blurA, Math.max(1, Math.floor(bw / 2)), Math.max(1, Math.floor(bh / 2)), true);
+    blurB = fit(blurB, ember.width, ember.height, true);
+    divNow = div;
+  } else if (!ember || !blurA || !blurB) {
+    ember = fit(ember, bw, bh, true);
+    blurA = fit(blurA, Math.max(1, Math.floor(bw / 2)), Math.max(1, Math.floor(bh / 2)), true);
+    blurB = fit(blurB, ember.width, ember.height, true);
+    divNow = div;
+  }
+  return {
+    viewW: Math.min(bw, ember!.width),
+    viewH: Math.min(bh, ember!.height),
+  };
+}
+
+/** Allocate the bloom targets and run the passes once so the driver links them before an animation. */
+export function prewarmBloom(renderer: WebGLRenderer, mobile: boolean): void {
+  const size = renderer.getDrawingBufferSize(texel);
+  ensureTargets(Math.max(1, Math.floor(size.x)), Math.max(1, Math.floor(size.y)), bloomDiv(mobile));
+  const prev = renderer.getRenderTarget();
+  blur(renderer, ember!, blurA!, dirX);
+  blur(renderer, blurA!, blurB!, dirY);
+  renderer.setRenderTarget(prev);
+}
+
 /** Draw the scene to the canvas, then add only the bloom texture. The main frame is never resampled. */
 export function renderComposited(
   renderer: WebGLRenderer,
@@ -121,21 +158,21 @@ export function renderComposited(
   const size = renderer.getDrawingBufferSize(texel);
   const w = Math.max(1, Math.floor(size.x));
   const h = Math.max(1, Math.floor(size.y));
-  if (w !== cw || h !== ch || !ember || !blurA || !blurB) {
-    const div = opts.mobile ? 8 : 4;
-    ember = fit(ember, Math.max(1, Math.floor(w / div)), Math.max(1, Math.floor(h / div)), true);
-    blurA = fit(blurA, Math.max(1, Math.floor(w / (div * 2))), Math.max(1, Math.floor(h / (div * 2))), true);
-    blurB = fit(blurB, ember.width, ember.height, true);
-    cw = w;
-    ch = h;
-  }
+  const view = ensureTargets(w, h, bloomDiv(opts.mobile));
   const mask = camera.layers.mask;
   camera.layers.set(LAYER_EMBER);
   bloomOnly.value = 1;
   renderer.setRenderTarget(ember);
+  const tight = view.viewW === ember!.width && view.viewH === ember!.height;
+  if (!tight) {
+    renderer.setViewport(0, 0, view.viewW, view.viewH);
+    renderer.setScissorTest(true);
+    renderer.setScissor(0, 0, view.viewW, view.viewH);
+  }
   renderer.setClearColor(0x000000, 0);
   renderer.clear(true, true, true);
   renderer.render(scene, camera);
+  if (!tight) renderer.setScissorTest(false);
   calls += renderer.info.render.calls;
   triangles += renderer.info.render.triangles;
   bloomOnly.value = 0;

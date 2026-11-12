@@ -5,6 +5,8 @@ import { openEquations, openSources } from '../../ui/drawer';
 import { fmtArea, fmtSig, fmtTemp } from '../../ui/format';
 import { bigNumber, card, el } from '../../ui/readout';
 import { createButtonRow, createCollapsible, createMoreDetail, createSlider, createToggle } from '../../ui/controls';
+import { span } from '../../engine/marks';
+import { holdMotion } from '../../engine/motion';
 import { reducedMotion, setActiveView } from '../../engine/renderer';
 import { createThermalCharts } from './charts';
 import { createThermalScene, footprintRadius } from './scene';
@@ -234,11 +236,19 @@ export function createThermalTab(summary: (text: string) => void) {
   eta.element.hidden = true;
   let powerAnim = 0;
   let follow: 'fit' | 'track' | 'out' | 'auto' = 'auto';
+  let motionLock = false;
+  let chartStamp = 0;
+  function lockMotion(on: boolean): void {
+    if (on === motionLock) return;
+    motionLock = on;
+    holdMotion(on);
+  }
   function stopPowerAnim(): void {
     if (powerAnim) cancelAnimationFrame(powerAnim);
     powerAnim = 0;
     if (frame) cancelAnimationFrame(frame);
     frame = 0;
+    lockMotion(false);
   }
   const power = createSlider({
     id: 'th-power',
@@ -270,17 +280,21 @@ export function createThermalTab(summary: (text: string) => void) {
     const decades = Math.abs(Math.log10(target / from));
     const duration = Math.min(3, Math.max(0.8, 0.6 * decades)) * 1000;
     const t0 = performance.now();
+    lockMotion(true);
     const step = () => {
-      const raw = Math.min(1, (performance.now() - t0) / duration);
+      const now = performance.now();
+      const raw = Math.min(1, (now - t0) / duration);
       const eased = raw * raw * (3 - 2 * raw);
       state.power = raw >= 1 ? target : Math.exp(Math.log(from) + (Math.log(target) - Math.log(from)) * eased);
       power.setValue(state.power, true);
       follow = 'track';
+      if (raw >= 1) chartStamp = 0;
       recompute(false);
       writeUrl();
       if (raw >= 1) {
         scene.finishInset();
         powerAnim = 0;
+        lockMotion(false);
       } else {
         powerAnim = requestAnimationFrame(step);
       }
@@ -361,7 +375,7 @@ export function createThermalTab(summary: (text: string) => void) {
     follow = 'auto';
     const p = state.power;
     const input = inputFor(p);
-    const result = thermalBudget(input);
+    const result = span('physics recompute', () => thermalBudget(input));
     const bare = thermalBudget({ ...input, pump: false, T_hot: null });
     scene.layout(
       {
@@ -374,10 +388,10 @@ export function createThermalTab(summary: (text: string) => void) {
     );
     const below = MILESTONES.filter((mark) => mark.watts < p * 0.999);
     scene.setRings(
-      below.slice(-3).reverse().map((mark) => ({
+      span('ring update', () => below.slice(-3).reverse().map((mark) => ({
         label: mark.label,
         radius: footprintRadius(thermalBudget({ ...input, P: mark.watts }).A_tot),
-      })),
+      }))),
     );
     total.set(fmtArea(result.A_tot));
     radStat.textContent = fmtArea(result.A_rad);
@@ -386,15 +400,20 @@ export function createThermalTab(summary: (text: string) => void) {
     delta.hidden = !state.pump;
     delta.textContent = `vs. no heat pump: ${pct >= 0 ? '+' : ''}${pct}%`;
     delta.className = pct > 0 ? 'delta bad' : pct < 0 ? 'delta good' : 'delta';
-    table.replaceChildren(
-      kv('Compute', fmtPower(p)),
-      kv('Pump power', fmtPower(result.W)),
-      kv('Electrical', fmtPower(p + result.W)),
-      kv('Heat to dump', fmtPower(result.Q_reject)),
-      kv('Radiator temperature', fmtTemp(result.T_hot).main),
-      kv('Flux', `${fmtSig(result.q_net)} W/m²`),
-    );
-    charts.update(input, result.T_hot);
+    if (mode !== 'track' || performance.now() - chartStamp >= 100) {
+      span('label updates', () => {
+        table.replaceChildren(
+          kv('Compute', fmtPower(p)),
+          kv('Pump power', fmtPower(result.W)),
+          kv('Electrical', fmtPower(p + result.W)),
+          kv('Heat to dump', fmtPower(result.Q_reject)),
+          kv('Radiator temperature', fmtTemp(result.T_hot).main),
+          kv('Flux', `${fmtSig(result.q_net)} W/m²`),
+        );
+      });
+      span('charts', () => charts.update(input, result.T_hot));
+      chartStamp = performance.now();
+    }
     const closest = REFERENCE_AREAS.reduce((best, ref) => {
       const score = Math.abs(Math.log(ref.m2 / result.A_tot));
       return score < best.score ? { score, ref } : best;
@@ -465,6 +484,7 @@ export function createThermalTab(summary: (text: string) => void) {
       stage()?.addEventListener('pointerdown', onStageDown);
       scene.rebind();
       setActiveView(scene.view());
+      scene.prewarm();
       follow = 'fit';
       wrapped();
     },

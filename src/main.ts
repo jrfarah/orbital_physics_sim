@@ -8,6 +8,7 @@ import './styles/base.css';
 import './styles/components.css';
 import { content } from './content';
 import { mountPerfHud } from './engine/perfHud';
+import { mountPresenter } from './engine/presenter';
 import { mountRenderer } from './engine/renderer';
 import { paintFace } from './tabs/radiator/faces2d';
 import { measureViewFactors } from './tabs/radiator/fisheye';
@@ -60,6 +61,7 @@ const tabbarEl: HTMLElement = tabbar;
 
 mountRenderer(canvasHost);
 mountPerfHud();
+mountPresenter();
 const sheet = createSheet();
 
 const summary = (text: string) => sheet.setSummary(text);

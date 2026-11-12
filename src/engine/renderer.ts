@@ -1,6 +1,9 @@
 import { ACESFilmicToneMapping, InstancedMesh, PerspectiveCamera, Scene, SRGBColorSpace, WebGLRenderer } from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { noteSlow, span } from './marks';
+import { motionHeld } from './motion';
 import { renderComposited } from './post';
+import { presenterOn, subscribePresenter } from './presenter';
 
 export interface TabView {
   scene: Scene;
@@ -117,7 +120,8 @@ export function isPointerDown(): boolean {
 }
 
 function initialRatio(): number {
-  return Math.max(1, Math.min(window.devicePixelRatio || 1, 2));
+  const full = Math.max(1, Math.min(window.devicePixelRatio || 1, 2));
+  return presenterOn() ? Math.min(full, 1.5) : full;
 }
 
 function floorRatio(): number {
@@ -128,8 +132,8 @@ function floorRatio(): number {
 
 function continuousRatio(): number {
   const dpr = window.devicePixelRatio || 1;
-  if (!isMobile() && dpr >= 2) return kesslerLow ? 1.25 : 1.5;
-  return floorRatio();
+  const next = !isMobile() && dpr >= 2 ? (kesslerLow ? 1.25 : 1.5) : floorRatio();
+  return Math.min(next, cap);
 }
 
 function noteFrame(ms: number, now: number): void {
@@ -221,7 +225,8 @@ function frame(now: number): void {
   last = now;
   if (!renderer || !active) return;
   const moved = active.controls.update();
-  if (active.continuous) {
+  const held = motionHeld();
+  if (!held && active.continuous) {
     const next = continuousRatio();
     if (Math.abs(ratio - next) > 0.01) {
       ratio = next;
@@ -231,7 +236,9 @@ function frame(now: number): void {
   const anim = active.update(dt);
   const motion = Boolean(active.continuous && anim) || moved || anim || pointerDown;
   let snap = false;
-  if (!active.continuous && motion) {
+  if (held) {
+    quietAt = now;
+  } else if (!active.continuous && motion) {
     quietAt = now;
     refined = false;
     const next = Math.max(floorRatio(), adaptive);
@@ -262,15 +269,18 @@ function frame(now: number): void {
     renderedFrames += 1;
     const t0 = performance.now();
     if (emberGlare > 0.02) {
-      const stats = renderComposited(renderer, active.scene, active.camera, { glare: emberGlare, mobile: isMobile() });
+      const stats = span('bloom', () => renderComposited(renderer!, active!.scene, active!.camera, { glare: emberGlare, mobile: isMobile() }));
       passStats.calls = stats.calls;
       passStats.triangles = stats.triangles;
     } else {
-      renderer.render(active.scene, active.camera);
+      span('render', () => renderer!.render(active!.scene, active!.camera));
       passStats.calls = renderer.info.render.calls;
       passStats.triangles = renderer.info.render.triangles;
     }
     const cost = performance.now() - t0;
+    const bucket = (window as Window & { __costs?: number[] }).__costs;
+    if (bucket) bucket.push(cost);
+    noteSlow(Math.max(cost, dt * 1000));
     if (active.continuous) noteFrame(cost, now);
     else if (motion) noteCost(cost);
     dirty = false;
@@ -369,10 +379,22 @@ export function mountRenderer(container: HTMLElement): void {
   canvas.addEventListener('webglcontextrestored', show);
   overlay?.addEventListener('click', () => location.reload());
   const observer = new ResizeObserver(() => {
+    if (!host || !renderer) return;
+    const w = Math.max(1, host.clientWidth);
+    const h = Math.max(1, host.clientHeight);
+    if (w === sizedW && h === sizedH && Math.abs(renderer.getPixelRatio() - ratio) < 0.01) return;
     applySize();
     requestRender();
   });
   observer.observe(container);
+  subscribePresenter(() => {
+    cap = initialRatio();
+    adaptive = Math.min(adaptive, cap);
+    if (motionHeld()) return;
+    ratio = active?.continuous ? continuousRatio() : cap;
+    applySize();
+    requestRender();
+  });
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
       if (looping) cancelAnimationFrame(raf);
