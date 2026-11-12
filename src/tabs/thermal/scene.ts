@@ -1,51 +1,60 @@
 import {
   AmbientLight,
-  BufferAttribute,
-  BufferGeometry,
-  CircleGeometry,
-  Color,
+  BoxGeometry,
+  CylinderGeometry,
   DirectionalLight,
-  LineDashedMaterial,
-  LineLoop,
+  EdgesGeometry,
+  InstancedBufferAttribute,
+  InstancedMesh,
+  LineBasicMaterial,
   LineSegments,
   Mesh,
-  MeshBasicMaterial,
-  PlaneGeometry,
+  MeshStandardMaterial,
+  Object3D,
+  DynamicDrawUsage,
   Scene,
-  ShaderMaterial,
   Vector3,
 } from 'three';
-import { createHeatMaterial, setHeat } from '../../engine/heatMaterial';
-import { clearUserOrbit, createControls, makeCamera, reducedMotion, requestRender, userHasOrbited, type TabView } from '../../engine/renderer';
-import { REFERENCE_AREAS } from '../../physics/references';
-import { fmtArea } from '../../ui/format';
+import { createHeatMaterial, setHeat, type HeatMaterial } from '../../engine/heatMaterial';
+import {
+  clearUserOrbit,
+  createControls,
+  makeCamera,
+  reducedMotion,
+  requestRender,
+  userHasOrbited,
+  type TabView,
+} from '../../engine/renderer';
+import { el } from '../../ui/readout';
 
-const T_COLD = 300;
-const T_HOT = 650;
-const ELEV = (35 * Math.PI) / 180;
-
-const SHAPES: Record<string, { w: number; h: number; name: string }> = {
-  football: { w: 109.7, h: 48.8, name: 'Football field' },
-  centralpark: { w: 4000, h: 850, name: 'Central Park' },
-  manhattan: { w: 21600, h: 2736, name: 'Manhattan' },
-  sf: { w: 11018, h: 11018, name: 'San Francisco' },
-  ri: { w: 51750, h: 51750, name: 'Rhode Island' },
-  ct: { w: 111990, h: 111990, name: 'Connecticut' },
-};
-
-interface Radii {
-  rad: number;
-  outer: number;
-  bare: number;
-}
-
+const GOLDEN = Math.PI * (3 - Math.sqrt(5));
+const MAX = 2600;
 export interface ThermalLayout {
   aRad: number;
-  aSol: number;
   aTot: number;
-  aBare: number;
   tHot: number;
-  pump: boolean;
+}
+
+interface Slot {
+  mesh: InstancedMesh;
+  mat: HeatMaterial;
+  scale: InstancedBufferAttribute;
+  mix: InstancedBufferAttribute;
+  k: number;
+  area: number;
+  side: number;
+  c: number;
+  count: number;
+  born: Float64Array;
+  die: Float64Array;
+  mixNow: Float32Array;
+  mixTo: Float32Array;
+}
+
+interface Zoom {
+  from: number;
+  to: number;
+  t0: number;
 }
 
 export function createThermalScene(overlay: HTMLElement) {
@@ -54,300 +63,323 @@ export function createThermalScene(overlay: HTMLElement) {
   sun.position.set(0.4, 1, 0.7);
   scene.add(sun, new AmbientLight(0xffffff, 0.45));
 
-  const ground = new Mesh(new PlaneGeometry(1, 1), new MeshBasicMaterial({ color: 0x070b12 }));
-  ground.rotation.x = -Math.PI / 2;
-  scene.add(ground);
-
-  const solarMat = new ShaderMaterial({
-    toneMapped: false,
-    uniforms: { uInner: { value: 0 }, uColor: { value: new Color('#16306e') } },
-    vertexShader: `
-      varying vec3 vWorld;
-      void main() {
-        vec4 world = modelMatrix * vec4(position, 1.0);
-        vWorld = world.xyz;
-        gl_Position = projectionMatrix * viewMatrix * world;
-      }
-    `,
-    fragmentShader: `
-      uniform float uInner;
-      uniform vec3 uColor;
-      varying vec3 vWorld;
-      void main() {
-        float r = length(vWorld.xz);
-        if (r < uInner) discard;
-        vec2 fw = max(fwidth(vWorld.xz), vec2(0.0001));
-        float fade = 1.0 - smoothstep(0.35, 1.1, max(fw.x, fw.y));
-        vec2 g = abs(fract(vWorld.xz - 0.5) - 0.5) / fw;
-        float line = (1.0 - min(min(g.x, g.y), 1.0)) * fade;
-        vec3 col = mix(uColor, min(uColor * 1.85, vec3(1.0)), line * 0.6);
-        gl_FragColor = vec4(col, 1.0);
-      }
-    `,
-  });
-  const solar = new Mesh(new CircleGeometry(1, 96), solarMat);
-  solar.rotation.x = -Math.PI / 2;
-  solar.position.y = 0.02;
-  scene.add(solar);
-
-  const heatMat = createHeatMaterial(0, false);
-  heatMat.polygonOffset = true;
-  heatMat.polygonOffsetFactor = -2;
-  heatMat.polygonOffsetUnits = -2;
-  const radiator = new Mesh(new CircleGeometry(1, 72), heatMat);
-  radiator.rotation.x = -Math.PI / 2;
-  radiator.position.y = 0.03;
-  scene.add(radiator);
-
-  const dot = new Mesh(new CircleGeometry(0.5, 20), new MeshBasicMaterial({ color: 0x5ce1ff, transparent: true, opacity: 0.9, depthWrite: false }));
-  dot.rotation.x = -Math.PI / 2;
-  dot.position.y = 0.08;
-  scene.add(dot);
-
-  const dashGeo = circleGeo();
-  const dashMat = new LineDashedMaterial({ color: 0x9aa9bb, dashSize: 1, gapSize: 0.6, transparent: true });
-  const dash = new LineLoop(dashGeo, dashMat);
-  scene.add(dash);
-
-  const leaders = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  leaders.setAttribute('class', 'leaders area-leaders');
-  overlay.append(leaders);
-  const tag = (text: string) => {
-    const node = document.createElement('div');
-    node.className = 'world-tag';
-    node.textContent = text;
-    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-    leaders.append(line);
-    overlay.append(node);
-    return { node, line };
-  };
-  const computeTag = tag('Compute');
-  const radTag = tag('Radiator');
-  const solTag = tag('Solar');
-  const pumpTag = tag('without heat pump');
-
-  const footprints = REFERENCE_AREAS.flatMap((ref) => {
-    const shape = SHAPES[ref.id];
-    if (!shape) return [];
-    const geo = new BufferGeometry();
-    geo.setAttribute('position', new BufferAttribute(new Float32Array(24), 3));
-    const mat = new LineDashedMaterial({ color: 0xc5ccd6, dashSize: 1, gapSize: 0.7, transparent: true, opacity: 0 });
-    const line = new LineSegments(geo, mat);
-    line.visible = false;
-    scene.add(line);
-    const label = tag(shape.name);
-    label.node.style.opacity = '0';
-    return [{ id: ref.id, name: shape.name, area: ref.m2, w: shape.w, h: shape.h, geo, mat, line, label, opacity: 0, target: 0, cx: 0, cz: 0 }];
-  });
-
   const camera = makeCamera();
   camera.near = 0.05;
-  camera.far = 1e7;
+  camera.far = 1e8;
+  camera.position.set(30, 24, 30);
   camera.updateProjectionMatrix();
-  let controls = createControls(camera, { min: 1, max: 1e7 });
-  let shown: Radii = { rad: 13, outer: 13, bare: 13 };
-  let anim: { t0: number; from: Radii; to: Radii } | null = null;
-  let dist = 40;
-  let distAnim: { t0: number; from: number; to: number } | null = null;
-  let pumpOn = false;
+  let controls = createControls(camera, { min: 0.2, max: 1e8 });
+  controls.target.set(0, 0, 0);
+
+  const hexGeo = new CylinderGeometry(1, 1, 0.08, 6);
+  const hex = new Mesh(
+    hexGeo,
+    new MeshStandardMaterial({ color: 0x12151c, metalness: 0.35, roughness: 0.55, envMap: null, envMapIntensity: 0 }),
+  );
+  hex.position.y = 0.16;
+  hex.renderOrder = 4;
+  const edges = new LineSegments(new EdgesGeometry(hexGeo), new LineBasicMaterial({ color: 0x5ce1ff }));
+  hex.add(edges);
+  scene.add(hex);
+
+  const slots = [makeSlot(), makeSlot()];
+  scene.add(slots[0].mesh, slots[1].mesh);
+  let shown = 0;
+  let outer = 4;
+  let fade: { from: number; to: number; t0: number } | null = null;
+  let zoom: Zoom | null = null;
+  let dragging = false;
+  let deferred = false;
+  let framed = false;
+
+  const chip = el('div', 'tile-chip', '1 tile = 5 m²');
+  const fitBtn = el('button', 'fit-btn', 'Fit') as HTMLButtonElement;
+  fitBtn.type = 'button';
+  fitBtn.addEventListener('click', () => fit());
+  const label = el('div', 'world-tag', 'Compute');
+  const leader = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  leader.setAttribute('class', 'leader');
+  const leaderLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+  leader.append(leaderLine);
+  overlay.append(leader, label, chip, fitBtn);
+
+  const dummy = new Object3D();
   const scratch = new Vector3();
 
-  applyRadii(shown);
-  applyPose(dist);
+  function onStart(): void {
+    dragging = true;
+    zoom = null;
+  }
+  function onEnd(): void {
+    dragging = false;
+    if (deferred) {
+      deferred = false;
+      considerZoom();
+    }
+  }
+  function bindControls(): void {
+    controls.addEventListener('start', onStart);
+    controls.addEventListener('end', onEnd);
+  }
+  bindControls();
 
   function layout(next: ThermalLayout): void {
-    const to = {
-      rad: discRadius(next.aRad),
-      outer: discRadius(next.aRad + next.aSol),
-      bare: discRadius(next.aBare),
-    };
-    pumpOn = next.pump;
-    radTag.node.textContent = `Radiator · ${fmtArea(next.aRad)}`;
-    solTag.node.textContent = `Solar · ${fmtArea(next.aSol)}`;
-    const heat = Math.min(1, Math.max(0, (next.tHot - T_COLD) / (T_HOT - T_COLD)));
-    setHeat(heatMat, heat);
-    placeFootprints(to.outer, next.aTot);
-    if (!anim && reducedMotion()) shown = to;
-    anim = { t0: performance.now(), from: { ...shown }, to };
-    if (!reducedMotion()) {
-      /* radii catch up in update() */
+    const area = Math.max(next.aTot, 1);
+    const k = pickK(area, slots[shown].k);
+    const slot = ensureLevel(k);
+    const heat = Math.min(1, Math.max(0, (next.tHot - 210) / 360));
+    setHeat(slots[0].mat, heat);
+    setHeat(slots[1].mat, heat);
+    fill(slot, next.aRad, area);
+    const text = `1 tile = ${Math.round(slot.area).toLocaleString('en-US')} m²`;
+    if (chip.textContent !== text) chip.textContent = text;
+    if (!framed) {
+      applyDistance(distanceFor(0.75));
+      framed = overlay.clientWidth > 2;
     } else {
-      shown = to;
-      anim = null;
-      applyRadii(shown);
+      considerZoom();
     }
-    maybeFrame();
     requestRender();
   }
 
-  function placeFootprints(outer: number, area: number): void {
-    const lo = area / 30;
-    const hi = area * 30;
-    const ranked = footprints
-      .filter((fp) => fp.area >= lo && fp.area <= hi && area > 0)
-      .sort((a, b) => Math.abs(Math.log(a.area / area)) - Math.abs(Math.log(b.area / area)))
-      .slice(0, 3);
-    const chosen = new Set(ranked.map((fp) => fp.id));
-    let cursor = outer * 1.35;
-    const gap = Math.max(outer * 0.12, 4);
-    for (const fp of footprints) {
-      fp.target = chosen.has(fp.id) ? 1 : 0;
-      if (!chosen.has(fp.id)) continue;
-      fp.cx = cursor + fp.w / 2;
-      fp.cz = 0;
-      cursor += fp.w + gap;
-      writeRect(fp.geo, fp.cx, fp.cz, fp.w, fp.h);
-      const dash = Math.max(fp.w, fp.h) * 0.035;
-      fp.mat.dashSize = dash;
-      fp.mat.gapSize = dash * 0.65;
-      fp.line.computeLineDistances();
+  function ensureLevel(k: number): Slot {
+    const front = slots[shown]!;
+    if (front.k === k) return front;
+    const next = 1 - shown;
+    const back = slots[next]!;
+    back.k = k;
+    back.area = 5 * 10 ** k;
+    back.side = Math.sqrt(back.area) * 0.92;
+    back.c = Math.sqrt((1.25 * back.area) / Math.PI);
+    back.count = 0;
+    back.die.fill(0);
+    if (reducedMotion() || front.count === 0) {
+      front.mesh.count = 0;
+      shown = next;
+      back.mat.opacity = 1;
+      back.mat.transparent = false;
+      back.mat.depthWrite = true;
+      fade = null;
+      return back;
     }
+    fade = { from: shown, to: next, t0: performance.now() };
+    shown = next;
+    back.mat.opacity = 0;
+    back.mat.transparent = true;
+    back.mat.depthWrite = false;
+    back.mesh.renderOrder = 2;
+    front.mesh.renderOrder = 1;
+    return back;
   }
 
-  function maybeFrame(): void {
-    if (userHasOrbited(controls)) return;
-    const next = desiredDist(anim?.to.outer ?? shown.outer);
-    const goal = distAnim?.to ?? dist;
-    if (!(next > 0) || Math.abs(Math.log(next / goal)) < 0.08) return;
-    if (reducedMotion()) {
-      dist = next;
-      distAnim = null;
-      applyPose(dist);
+  function fill(slot: Slot, aRad: number, aTot: number): void {
+    const now = performance.now();
+    const instant = fade !== null;
+    const total = Math.min(MAX, Math.max(1, Math.round(aTot / slot.area)));
+    const nRad = Math.min(total, Math.max(0, Math.round(aRad / slot.area)));
+    const prev = slot.count;
+    for (let i = 0; i < total; i++) {
+      const revived = slot.die[i]! > 0;
+      if (i >= prev || revived) {
+        slot.born[i] = instant ? now - 2000 : now;
+        slot.die[i] = 0;
+        place(slot, i);
+        slot.mixNow[i] = i < nRad ? 0 : 1;
+      }
+      slot.mixTo[i] = i < nRad ? 0 : 1;
+    }
+    for (let i = total; i < prev; i++) {
+      if (slot.die[i] === 0) slot.die[i] = now;
+    }
+    let drawn = total;
+    for (let i = total; i < MAX; i++) {
+      if (slot.die[i]! > 0 && now - slot.die[i]! < 280) drawn = i + 1;
+    }
+    slot.count = total;
+    slot.mesh.count = drawn;
+    slot.mesh.instanceMatrix.needsUpdate = true;
+    outer = slot.c * Math.sqrt(Math.max(total - 1, 0) + 0.5) + slot.side;
+  }
+
+  function place(slot: Slot, index: number): void {
+    const theta = index * GOLDEN;
+    const rho = slot.c * Math.sqrt(index + 0.5);
+    dummy.position.set(Math.cos(theta) * rho, 0.02, Math.sin(theta) * rho);
+    dummy.rotation.set(0, 0, 0);
+    dummy.scale.set(1, 1, 1);
+    dummy.updateMatrix();
+    slot.mesh.setMatrixAt(index, dummy.matrix);
+  }
+
+  function pop(slot: Slot, index: number, now: number): number {
+    if (slot.die[index]! > 0) {
+      if (reducedMotion()) return 0;
+      const t = Math.min(1, Math.max(0, (now - slot.die[index]!) / 250));
+      return slot.side * (1 - smooth(t));
+    }
+    if (reducedMotion()) return slot.side;
+    const delay = Math.min(index * 3, 400);
+    const t = Math.min(1, Math.max(0, (now - slot.born[index]! - delay) / 250));
+    return slot.side * smooth(t);
+  }
+
+  function tickSlot(slot: Slot, now: number, dt: number): boolean {
+    if (slot.mesh.count === 0) return false;
+    let live = false;
+    let drawn = 0;
+    const mixStep = Math.min(1, dt / 0.3);
+    for (let i = 0; i < slot.mesh.count; i++) {
+      const size = pop(slot, i, now);
+      slot.scale.setX(i, size);
+      const target = slot.mixTo[i] ?? 1;
+      const current = slot.mixNow[i] ?? target;
+      if (Math.abs(current - target) > 0.004) {
+        slot.mixNow[i] = current + (target - current) * mixStep;
+        live = true;
+      }
+      slot.mix.setX(i, slot.mixNow[i] ?? target);
+      if (size > 0.001) drawn = i + 1;
+      if (slot.die[i]! > 0) {
+        if (now - slot.die[i]! < 280) live = true;
+      } else if (now < slot.born[i]! + Math.min(i * 3, 400) + 250) {
+        live = true;
+      }
+    }
+    slot.scale.needsUpdate = true;
+    slot.mix.needsUpdate = true;
+    if (drawn < slot.mesh.count) slot.mesh.count = Math.max(drawn, slot.count);
+    return live;
+  }
+
+  function projectedFrac(): number {
+    const w = overlay.clientWidth || 800;
+    const h = overlay.clientHeight || 600;
+    const dist = Math.max(camera.position.length(), 1e-3);
+    const fov = (camera.fov * Math.PI) / 180;
+    const px = (outer / dist) * (h / 2) / Math.tan(fov / 2);
+    return px / (Math.min(w, h) / 2);
+  }
+
+  function distanceFor(frac: number): number {
+    const w = overlay.clientWidth || 800;
+    const h = overlay.clientHeight || 600;
+    const fov = (camera.fov * Math.PI) / 180;
+    const px = frac * (Math.min(w, h) / 2);
+    return (outer * (h / 2)) / Math.tan(fov / 2) / Math.max(px, 1);
+  }
+
+  function applyDistance(dist: number): void {
+    const length = Math.max(camera.position.length(), 1e-3);
+    camera.position.multiplyScalar(dist / length);
+    camera.near = Math.max(0.02, dist / 2000);
+    camera.far = Math.max(dist * 40, 1000);
+    camera.updateProjectionMatrix();
+    camera.lookAt(controls.target);
+  }
+
+  function considerZoom(): void {
+    if (projectedFrac() <= 0.92) return;
+    if (dragging) {
+      deferred = true;
       return;
     }
-    distAnim = { t0: performance.now(), from: dist, to: next };
+    const dest = distanceFor(0.75);
+    if (zoom) {
+      zoom.to = dest;
+      return;
+    }
+    const from = camera.position.length();
+    if (Math.abs(from - dest) / dest < 0.02) return;
+    if (reducedMotion()) {
+      applyDistance(dest);
+      return;
+    }
+    zoom = { from, to: dest, t0: performance.now() };
   }
 
-  function desiredDist(outer: number): number {
-    const aspect = Math.max(0.3, camera.aspect || 1);
-    const fov = (camera.fov * Math.PI) / 180;
-    const span = 2 * Math.tan(fov / 2) * aspect;
-    return (2 * Math.max(outer, 1)) / (0.45 * span);
-  }
-
-  function applyPose(distance: number): void {
-    dist = distance;
-    camera.position.set(0, distance * Math.sin(ELEV), distance * Math.cos(ELEV));
-    camera.near = Math.max(0.02, distance / 400);
-    camera.far = distance * 80;
-    camera.updateProjectionMatrix();
-    camera.lookAt(0, 0, 0);
-    controls.target.set(0, 0, 0);
-    controls.minDistance = Math.max(0.4, distance * 0.12);
-    controls.maxDistance = distance * 40;
-    controls.update();
-    const reach = distance * 30;
-    ground.scale.set(reach, reach, 1);
-  }
-
-  function applyRadii(radii: Radii): void {
-    shown = radii;
-    const outer = Math.max(radii.outer, 0.05);
-    const rad = Math.max(radii.rad, 0.02);
-    solar.scale.setScalar(outer);
-    solarMat.uniforms.uInner!.value = Math.min(rad, outer * 0.999);
-    radiator.scale.setScalar(rad);
-    writeCircle(dashGeo, Math.max(radii.bare, 0.05), 0.1);
-    dash.computeLineDistances();
-    dashMat.dashSize = Math.max(radii.bare * 0.04, 0.4);
-    dashMat.gapSize = dashMat.dashSize * 0.65;
-    dash.visible = pumpOn;
-    const host = overlay.clientWidth || 800;
-    const fov = (camera.fov * Math.PI) / 180;
-    const viewW = 2 * dist * Math.tan(fov / 2) * Math.max(camera.aspect, 0.3);
-    dot.scale.setScalar(Math.max((14 / host) * viewW, 0.2));
+  function fit(): void {
+    const dest = distanceFor(0.75);
+    const from = camera.position.length();
+    deferred = false;
+    if (reducedMotion() || Math.abs(from - dest) / Math.max(dest, 1e-3) < 0.02) {
+      zoom = null;
+      applyDistance(dest);
+    } else {
+      zoom = { from, to: dest, t0: performance.now() };
+    }
+    requestRender();
   }
 
   function view(): TabView {
     return {
       scene,
       camera,
-      controls,
+      get controls() {
+        return controls;
+      },
       update(dt) {
-        let live = false;
-        if (anim) {
-          const t = Math.min(1, (performance.now() - anim.t0) / 250);
+        const now = performance.now();
+        let live = tickSlot(slots[shown]!, now, dt);
+        if (fade) {
+          const other = slots[fade.from]!;
+          live = tickSlot(other, now, dt) || live;
+          const t = Math.min(1, (now - fade.t0) / 400);
+          const e = reducedMotion() ? 1 : smooth(t);
+          slots[fade.to]!.mat.opacity = e;
+          other.mat.opacity = 1 - e;
+          other.mat.transparent = true;
+          if (t >= 1) {
+            other.mesh.count = 0;
+            other.mat.opacity = 1;
+            other.mat.transparent = false;
+            const front = slots[fade.to]!;
+            front.mat.opacity = 1;
+            front.mat.transparent = false;
+            front.mat.depthWrite = true;
+            fade = null;
+          }
+          live = true;
+        }
+        if (zoom) {
+          const t = Math.min(1, (now - zoom.t0) / 500);
           const e = 1 - (1 - t) ** 3;
-          applyRadii(lerpRadii(anim.from, anim.to, e));
-          if (t >= 1) anim = null;
-          live = true;
-        }
-        if (distAnim) {
-          const t = Math.min(1, (performance.now() - distAnim.t0) / 1200);
-          const e = t < 0.5 ? 2 * t * t : 1 - ((-2 * t + 2) ** 2) / 2;
-          const logD = Math.log(distAnim.from) + (Math.log(distAnim.to) - Math.log(distAnim.from)) * e;
-          applyPose(Math.exp(logD));
-          if (t >= 1) distAnim = null;
-          live = true;
-        }
-        const fade = reducedMotion() ? 1 : Math.min(1, dt / 0.3);
-        for (const fp of footprints) {
-          if (Math.abs(fp.opacity - fp.target) < 0.01) continue;
-          fp.opacity += (fp.target - fp.opacity) * fade;
-          fp.mat.opacity = fp.opacity;
-          fp.line.visible = fp.opacity > 0.03;
-          fp.label.node.style.opacity = String(fp.opacity);
+          applyDistance(zoom.from + (zoom.to - zoom.from) * e);
+          if (t >= 1) {
+            zoom = null;
+            if (projectedFrac() > 0.93) considerZoom();
+          }
           live = true;
         }
         return live;
       },
       resetView() {
         clearUserOrbit(controls);
-        const from = Math.max(camera.position.length(), 0.1);
-        const to = desiredDist(anim?.to.outer ?? shown.outer);
-        if (reducedMotion() || Math.abs(Math.log(to / from)) < 0.02) {
-          distAnim = null;
-          applyPose(to);
-        } else {
-          dist = from;
-          distAnim = { t0: performance.now(), from, to };
-        }
-        requestRender();
+        fit();
       },
       onResize() {
         if (userHasOrbited(controls)) return;
-        distAnim = null;
-        dist = desiredDist(anim?.to.outer ?? shown.outer);
-        applyPose(dist);
+        zoom = null;
+        applyDistance(distanceFor(0.75));
+        framed = true;
       },
       syncDom() {
         if (!overlay.isConnected || overlay.clientWidth < 2) return;
-        const height = overlay.clientHeight;
-        const items: { node: HTMLElement; line: SVGLineElement; x: number; y: number; show: boolean }[] = [];
-        const put = (mark: { node: HTMLElement; line: SVGLineElement }, x: number, y: number, z: number, show: boolean) => {
-          const p = project(x, y, z);
-          items.push({ node: mark.node, line: mark.line, x: p.x, y: p.y, show: show && p.ok });
-        };
-        put(computeTag, 0, 0.2, 0, true);
-        put(radTag, -shown.rad * 0.15, 0.05, shown.rad * 0.75, shown.rad > 0.05);
-        put(solTag, shown.outer * 0.15, 0.05, -shown.outer * 0.82, shown.outer > shown.rad + 0.05);
-        put(pumpTag, shown.bare, 0.12, 0, pumpOn);
-        for (const fp of footprints) put(fp.label, fp.cx - fp.w / 2, 0.1, 0, fp.opacity > 0.05);
+        const p = project(0, 0.2, 0);
+        const dist = Math.max(camera.position.length(), 1e-3);
+        const fov = (camera.fov * Math.PI) / 180;
+        const hexPx = (2 / dist) * (overlay.clientHeight / 2) / Math.tan(fov / 2);
+        const show = p.ok && hexPx >= 8;
+        label.hidden = !show;
+        leaderLine.style.display = show ? '' : 'none';
+        if (!show) return;
+        label.style.left = `${p.x + 18}px`;
+        label.style.top = `${p.y - 22}px`;
+        const box = label.getBoundingClientRect();
         const origin = overlay.getBoundingClientRect();
-        const taken: { x: number; y: number; w: number; h: number }[] = [];
-        for (const item of items) {
-          item.node.hidden = !item.show;
-          item.line.style.display = item.show ? '' : 'none';
-          if (!item.show) continue;
-          let y = Math.min(Math.max(item.y - 18, 8), height - 64);
-          item.node.style.left = `${item.x}px`;
-          item.node.style.top = `${y}px`;
-          for (let guard = 0; guard < 6; guard++) {
-            const box = item.node.getBoundingClientRect();
-            const local = { x: box.left - origin.left, y: box.top - origin.top, w: box.width, h: box.height };
-            const hit = taken.some((prev) => local.x < prev.x + prev.w && local.x + local.w > prev.x && local.y < prev.y + prev.h && local.y + local.h > prev.y);
-            if (!hit) {
-              taken.push(local);
-              item.line.setAttribute('x1', String(item.x));
-              item.line.setAttribute('y1', String(item.y));
-              item.line.setAttribute('x2', String(local.x + local.w / 2));
-              item.line.setAttribute('y2', String(local.y + local.h));
-              break;
-            }
-            y -= 16;
-            item.node.style.top = `${y}px`;
-          }
-        }
+        leaderLine.setAttribute('x1', String(p.x));
+        leaderLine.setAttribute('y1', String(p.y));
+        leaderLine.setAttribute('x2', String(box.left - origin.left));
+        leaderLine.setAttribute('y2', String(box.top - origin.top + box.height / 2));
       },
     };
   }
@@ -367,8 +399,9 @@ export function createThermalScene(overlay: HTMLElement) {
     rebind() {
       controls.dispose();
       const target = controls.target.clone();
-      controls = createControls(camera, { min: controls.minDistance, max: controls.maxDistance });
+      controls = createControls(camera, { min: 0.2, max: 1e8 });
       controls.target.copy(target);
+      bindControls();
       controls.update();
     },
     detach() {
@@ -377,41 +410,56 @@ export function createThermalScene(overlay: HTMLElement) {
   };
 }
 
-function discRadius(area: number): number {
-  if (!Number.isFinite(area) || area <= 0) return 0.05;
-  return Math.sqrt(area / Math.PI);
+function makeSlot(): Slot {
+  const geo = new BoxGeometry(1, 0.04, 1);
+  const scale = new InstancedBufferAttribute(new Float32Array(MAX), 1);
+  const mix = new InstancedBufferAttribute(new Float32Array(MAX), 1);
+  geo.setAttribute('aScale', scale);
+  geo.setAttribute('aMix', mix);
+  const mat = createHeatMaterial(0.2, true);
+  mat.envMap = null;
+  mat.envMapIntensity = 0;
+  const mesh = new InstancedMesh(geo, mat, MAX);
+  mesh.count = 0;
+  mesh.frustumCulled = false;
+  mesh.instanceMatrix.setUsage(DynamicDrawUsage);
+  return {
+    mesh,
+    mat,
+    scale,
+    mix,
+    k: -1,
+    area: 5,
+    side: Math.sqrt(5) * 0.92,
+    c: Math.sqrt((1.25 * 5) / Math.PI),
+    count: 0,
+    born: new Float64Array(MAX),
+    die: new Float64Array(MAX),
+    mixNow: new Float32Array(MAX),
+    mixTo: new Float32Array(MAX).fill(1),
+  };
 }
 
-function lerpRadii(a: Radii, b: Radii, t: number): Radii {
-  return { rad: a.rad + (b.rad - a.rad) * t, outer: a.outer + (b.outer - a.outer) * t, bare: a.bare + (b.bare - a.bare) * t };
-}
-
-function circleGeo(): BufferGeometry {
-  const count = 128;
-  const geo = new BufferGeometry();
-  geo.setAttribute('position', new BufferAttribute(new Float32Array(count * 3), 3));
-  return geo;
-}
-
-function writeCircle(geo: BufferGeometry, radius: number, y: number): void {
-  const attr = geo.getAttribute('position') as BufferAttribute;
-  for (let i = 0; i < attr.count; i++) {
-    const t = (i / attr.count) * Math.PI * 2;
-    attr.setXYZ(i, Math.cos(t) * radius, y, Math.sin(t) * radius);
+function pickK(area: number, current: number): number {
+  const count = (k: number) => area / (5 * 10 ** k);
+  if (current < 0) {
+    let k = 0;
+    while (count(k) > 2000 && k < 8) k += 1;
+    return k;
   }
-  attr.needsUpdate = true;
-  geo.computeBoundingSphere();
+  if (count(current) > 2400) {
+    let k = current;
+    while (count(k) > 2400 && k < 8) k += 1;
+    return k;
+  }
+  if (current > 0 && count(current) < 120) {
+    let k = current;
+    while (k > 0 && count(k) < 120) k -= 1;
+    return k;
+  }
+  return current;
 }
 
-function writeRect(geo: BufferGeometry, cx: number, cz: number, w: number, h: number): void {
-  const y = 0.05;
-  const x0 = cx - w / 2;
-  const x1 = cx + w / 2;
-  const z0 = cz - h / 2;
-  const z1 = cz + h / 2;
-  const attr = geo.getAttribute('position') as BufferAttribute;
-  const pts = [x0, y, z0, x1, y, z0, x1, y, z0, x1, y, z1, x1, y, z1, x0, y, z1, x0, y, z1, x0, y, z0];
-  for (let i = 0; i < 8; i++) attr.setXYZ(i, pts[i * 3] ?? 0, pts[i * 3 + 1] ?? 0, pts[i * 3 + 2] ?? 0);
-  attr.needsUpdate = true;
-  geo.computeBoundingSphere();
+function smooth(t: number): number {
+  return t * t * (3 - 2 * t);
 }

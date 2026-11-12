@@ -4,16 +4,17 @@ import { thermalBudget, type ThermalInput } from '../../physics/thermal';
 import { openEquations, openSources } from '../../ui/drawer';
 import { fmtArea, fmtSig, fmtTemp } from '../../ui/format';
 import { bigNumber, card, el } from '../../ui/readout';
-import { createButtonRow, createCollapsible, createMoreDetail, createSegmented, createSlider, createToggle } from '../../ui/controls';
-import { setActiveView } from '../../engine/renderer';
+import { createButtonRow, createCollapsible, createMoreDetail, createSlider, createToggle } from '../../ui/controls';
+import { reducedMotion, setActiveView } from '../../engine/renderer';
 import { createThermalCharts } from './charts';
 import { createThermalScene } from './scene';
 
-type ScaleId = 'kw' | 'mw' | 'gw' | 'tw';
-
-const POWER: Record<ScaleId, number> = { kw: 120e3, mw: 1e6, gw: 1e9, tw: 1e12 };
-const SCALE_NAME: Record<ScaleId, string> = { kw: '120 kW', mw: '1 MW', gw: '1 GW', tw: '1 TW' };
-const FOOTPRINTS = REFERENCE_AREAS.filter((ref) => ref.id !== 'spacex');
+const SNAPS = [
+  { label: '120 kW', watts: 120e3 },
+  { label: '1 MW', watts: 1e6 },
+  { label: '1 GW', watts: 1e9 },
+  { label: '1 TW', watts: 1e12 },
+];
 const FOOT_NAME: Record<string, string> = {
   football: 'Football field',
   centralpark: 'Central Park',
@@ -21,6 +22,7 @@ const FOOT_NAME: Record<string, string> = {
   sf: 'San Francisco',
   ri: 'Rhode Island',
   ct: 'Connecticut',
+  spacex: 'SpaceX AI satellite (~800 m²)',
 };
 
 interface ThermalState {
@@ -34,7 +36,7 @@ interface ThermalState {
   pump: boolean;
   tHot: number;
   eta: number;
-  scale: ScaleId;
+  power: number;
 }
 
 function defaults(): ThermalState {
@@ -49,16 +51,21 @@ function defaults(): ThermalState {
     pump: false,
     tHot: 400,
     eta: 0.5,
-    scale: 'kw',
+    power: 120e3,
   };
 }
 
 function fmtPower(w: number): string {
   const ax = Math.abs(w);
-  if (ax >= 1e12) return `${fmtSig(w / 1e12)} TW`;
-  if (ax >= 1e9) return `${fmtSig(w / 1e9)} GW`;
-  if (ax >= 1e6) return `${fmtSig(w / 1e6)} MW`;
-  if (ax >= 1e3) return `${fmtSig(w / 1e3)} kW`;
+  const steps: [number, string][] = [[1e12, 'TW'], [1e9, 'GW'], [1e6, 'MW'], [1e3, 'kW']];
+  for (const [scale, unit] of steps) {
+    if (ax >= scale * 0.9995) {
+      const n = w / scale;
+      const digits = n >= 100 ? 0 : n >= 10 ? 1 : 2;
+      const text = n.toFixed(digits).replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '');
+      return `${text} ${unit}`;
+    }
+  }
   return `${fmtSig(w)} W`;
 }
 
@@ -215,20 +222,50 @@ export function createThermalTab(summary: (text: string) => void) {
   });
   tHot.element.hidden = true;
   eta.element.hidden = true;
-  const scale = createSegmented<ScaleId>({
-    id: 'th-scale',
-    options: [
-      { value: 'kw', label: '120 kW (1 satellite)' },
-      { value: 'mw', label: '1 MW' },
-      { value: 'gw', label: '1 GW' },
-      { value: 'tw', label: '1 TW' },
-    ],
-    value: 'kw',
-    onChange: (value) => {
-      state.scale = value;
+  let powerAnim = 0;
+  function stopPowerAnim(): void {
+    if (powerAnim) cancelAnimationFrame(powerAnim);
+    powerAnim = 0;
+  }
+  const power = createSlider({
+    id: 'th-power',
+    label: 'Compute power',
+    min: 120e3,
+    max: 1e12,
+    step: 1,
+    scale: 'log',
+    value: 120e3,
+    format: fmtPower,
+    onInput: (v) => {
+      stopPowerAnim();
+      state.power = v;
       wrapped();
     },
   });
+  function animatePower(target: number): void {
+    stopPowerAnim();
+    if (reducedMotion()) {
+      state.power = target;
+      power.setValue(target, true);
+      wrapped();
+      return;
+    }
+    const from = state.power;
+    const t0 = performance.now();
+    const step = () => {
+      const t = Math.min(1, (performance.now() - t0) / 600);
+      state.power = t >= 1 ? target : Math.exp(Math.log(from) + (Math.log(target) - Math.log(from)) * t);
+      power.setValue(state.power, true);
+      recompute();
+      writeUrl();
+      powerAnim = t < 1 ? requestAnimationFrame(step) : 0;
+    };
+    powerAnim = requestAnimationFrame(step);
+  }
+  const snaps = createButtonRow(
+    SNAPS.map((snap) => ({ label: snap.label, onClick: () => animatePower(snap.watts) })),
+    'chips',
+  );
 
   const chips = el('div', 'section');
   chips.append(el('h2', 'section-title', 'Chips'), gpu.element, drop.element);
@@ -255,7 +292,7 @@ export function createThermalTab(summary: (text: string) => void) {
     textButton('Equations', () => void openEquations('Equations', content.equations.thermal)),
     textButton('Reset view', () => scene.view().resetView()),
   );
-  controls.append(scale.element, chips, pumpBlock, advanced, footer);
+  controls.append(power.element, snaps, chips, pumpBlock, advanced, footer);
 
   function inputFor(p: number): ThermalInput {
     const cold = state.tGpu - state.dT;
@@ -285,7 +322,7 @@ export function createThermalTab(summary: (text: string) => void) {
     pump.setValue(state.pump, true);
     tHot.setValue(state.tHot, true);
     eta.setValue(state.eta, true);
-    scale.setValue(state.scale, true);
+    power.setValue(state.power, true);
     tHot.element.hidden = !state.pump;
     eta.element.hidden = !state.pump;
   }
@@ -295,17 +332,14 @@ export function createThermalTab(summary: (text: string) => void) {
     const hot = Math.max(cold + 1, Math.min(600, state.tHot));
     state.tHot = hot;
     tHot.setRange(Math.min(599, cold + 1), 600, hot);
-    const p = POWER[state.scale];
+    const p = state.power;
     const input = inputFor(p);
     const result = thermalBudget(input);
     const bare = thermalBudget({ ...input, pump: false, T_hot: null });
     scene.layout({
       aRad: result.A_rad,
-      aSol: result.A_sol,
       aTot: result.A_tot,
-      aBare: bare.A_tot,
       tHot: result.T_hot,
-      pump: state.pump,
     });
     total.set(fmtArea(result.A_tot));
     radStat.textContent = fmtArea(result.A_rad);
@@ -323,15 +357,14 @@ export function createThermalTab(summary: (text: string) => void) {
       kv('Flux', `${fmtSig(result.q_net)} W/m²`),
     );
     charts.update(input, result.T_hot);
-    const closest = FOOTPRINTS.reduce((best, ref) => {
+    const closest = REFERENCE_AREAS.reduce((best, ref) => {
       const score = Math.abs(Math.log(ref.m2 / result.A_tot));
       return score < best.score ? { score, ref } : best;
-    }, { score: Infinity, ref: FOOTPRINTS[0]! });
+    }, { score: Infinity, ref: REFERENCE_AREAS[0]! });
     const k = result.A_tot / closest.ref.m2;
     const kText = k >= 10 ? String(Math.round(k)) : k.toFixed(1);
-    const yearly = state.scale === 'kw' ? '' : ' · deployed every year';
-    caption.textContent = `${SCALE_NAME[state.scale]}: ${fmtArea(result.A_tot)} of solar + radiator ≈ ${kText}× ${FOOT_NAME[closest.ref.id] ?? closest.ref.label}${yearly}`;
-    summary(`${fmtArea(result.A_tot)} · ${SCALE_NAME[state.scale]}`);
+    caption.textContent = `${fmtPower(p)}: ${fmtArea(result.A_tot)} of solar + radiator ≈ ${kText}× ${FOOT_NAME[closest.ref.id] ?? closest.ref.label}`;
+    summary(`${fmtArea(result.A_tot)} · ${fmtPower(p)}`);
   }
 
   let urlTimer = 0;
@@ -349,7 +382,7 @@ export function createThermalTab(summary: (text: string) => void) {
       if (state.pump) params.set('pump', '1');
       if (state.pump && state.tHot !== 400) params.set('Thot', String(Math.round(state.tHot)));
       if (state.pump && state.eta !== 0.5) params.set('eta', String(state.eta));
-      if (state.scale !== 'kw') params.set('scale', state.scale);
+      if (Math.abs(state.power - 120e3) / 120e3 > 0.01) params.set('P', String(Math.round(state.power)));
       const qs = params.toString();
       const next = `#/thermal${qs ? `?${qs}` : ''}`;
       if (location.hash !== next) history.replaceState(null, '', next);
@@ -391,10 +424,12 @@ export function createThermalTab(summary: (text: string) => void) {
       next.pump = params.get('pump') === '1';
       next.tHot = num('Thot', 400);
       next.eta = num('eta', 0.5);
+      const watts = Number(params.get('P'));
       const scaleId = params.get('scale');
-      if (scaleId === 'mw' || scaleId === 'gw' || scaleId === 'tw' || scaleId === 'kw') next.scale = scaleId;
-      else if (scaleId === 'sat') next.scale = 'kw';
-      else if (params.get('size') === 'mw') next.scale = 'mw';
+      const legacy: Record<string, number> = { kw: 120e3, sat: 120e3, mw: 1e6, gw: 1e9, tw: 1e12 };
+      if (Number.isFinite(watts) && watts > 0) next.power = Math.min(1e12, Math.max(120e3, watts));
+      else if (scaleId && legacy[scaleId]) next.power = legacy[scaleId];
+      else if (params.get('size') === 'mw') next.power = 1e6;
       Object.assign(state, next);
       paint();
     },
