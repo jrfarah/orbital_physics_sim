@@ -1,6 +1,11 @@
 import { earthTextureLine } from './earth';
 import { subscribePerf, type PerfSample } from './renderer';
 
+function uploadBytes(): number {
+  const counter = (window as Window & { __uploads?: { bytes: () => number } }).__uploads;
+  return counter?.bytes() ?? 0;
+}
+
 /** Dev overlay. Visible only when the URL contains `perf=1`. */
 export function mountPerfHud(): void {
   if (!location.href.includes('perf=1')) return;
@@ -36,6 +41,7 @@ export function mountPerfHud(): void {
       `pixel ratio ${last ? last.pixelRatio.toFixed(3) : '—'}`,
       `animations ${idle ? 0 : (last?.animations ?? 0)}`,
       `scene ${last?.scene ?? '—'}`,
+      `attribute uploads ${uploadBytes().toLocaleString('en-US')} B`,
       earthTextureLine(),
     ];
     root.textContent = lines.join('\n');

@@ -9,7 +9,7 @@ import { span } from '../../engine/marks';
 import { holdMotion } from '../../engine/motion';
 import { reducedMotion, setActiveView } from '../../engine/renderer';
 import { createThermalCharts } from './charts';
-import { SATELLITE_W } from './hex';
+import { BLOCK_M, SATELLITE_W } from './hex';
 import { arrayRadius, createThermalScene } from './scene';
 
 const SNAPS = [
@@ -87,6 +87,12 @@ export function createThermalTab(summary: (text: string) => void) {
   const overlay = el('div', 'stage-overlay');
   const caption = el('div', 'stage-caption');
   const scene = createThermalScene(overlay);
+  const takeRow = el('div', 'take-row');
+  const stack = el('div', 'stage-stack');
+  stack.append(takeRow);
+  const scaleBar = overlay.querySelector('.scale-bar');
+  if (scaleBar) stack.append(scaleBar);
+  overlay.append(stack);
   const charts = createThermalCharts();
   const hud = el('div');
 
@@ -103,7 +109,8 @@ export function createThermalTab(summary: (text: string) => void) {
 
   const table = el('div');
   const packNote = el('p', 'caption', 'Satellites shown packed edge to edge (~10% gaps); in orbit they would be spread across the sky.');
-  const more = createMoreDetail('thermal', [table, charts.detail, packNote]);
+  const blockNote = el('p', 'caption', 'Gigawatt blocks are spaced apart for visibility; total area is unchanged.');
+  const more = createMoreDetail('thermal', [table, charts.detail, packNote, blockNote]);
   hud.append(hero.element, charts.element, more);
 
   const gpu = createSlider({
@@ -396,7 +403,11 @@ export function createThermalTab(summary: (text: string) => void) {
     scene.setRings(
       span('ring update', () => below.slice(-3).reverse().map((mark) => ({
         label: mark.label,
-        radius: arrayRadius(mark.watts / SATELLITE_W, unit.A_rad, unit.A_tot),
+        radius: arrayRadius(
+          mark.watts >= 1e9 ? Math.ceil(mark.watts / 1e9 - 1e-9) * BLOCK_M : mark.watts / SATELLITE_W,
+          unit.A_rad,
+          unit.A_tot,
+        ),
       }))),
     );
     total.set(fmtArea(result.A_tot));
@@ -428,7 +439,9 @@ export function createThermalTab(summary: (text: string) => void) {
     const kText = k >= 10 ? String(Math.round(k)) : k.toFixed(1);
     const sats = Math.max(1, Math.ceil(p / SATELLITE_W - 1e-9));
     const satText = sats >= 1e6 ? `${(sats / 1e6).toFixed(1)} million` : sats.toLocaleString('en-US');
-    caption.textContent = `${fmtPower(p)}: ${satText} satellites, ${fmtArea(result.A_tot)} of solar + radiator, packed together for comparison ≈ ${kText}× ${FOOT_NAME[closest.ref.id] ?? closest.ref.label}`;
+    const captionText = `${fmtPower(p)}: ${satText} satellites, ${fmtArea(result.A_tot)} of solar + radiator, packed together for comparison ≈ ${kText}× ${FOOT_NAME[closest.ref.id] ?? closest.ref.label}`;
+    caption.textContent = captionText;
+    caption.title = captionText;
     summary(`${fmtArea(result.A_tot)} · ${fmtPower(p)}`);
   }
 
@@ -488,7 +501,12 @@ export function createThermalTab(summary: (text: string) => void) {
     hud,
     controls,
     show() {
-      document.getElementById('stage')?.append(overlay, caption);
+      const stageEl = document.getElementById('stage');
+      stageEl?.classList.add('thermal-layout');
+      stageEl?.append(overlay);
+      const take = document.getElementById('takeaway');
+      if (take) takeRow.append(take, caption);
+      else takeRow.append(caption);
       stage()?.addEventListener('pointerdown', onStageDown);
       scene.rebind();
       setActiveView(scene.view());
@@ -498,8 +516,11 @@ export function createThermalTab(summary: (text: string) => void) {
     },
     hide() {
       stage()?.removeEventListener('pointerdown', onStageDown);
-      overlay.remove();
+      document.getElementById('stage')?.classList.remove('thermal-layout');
+      const take = document.getElementById('takeaway');
+      if (take) document.getElementById('stage')?.append(take);
       caption.remove();
+      overlay.remove();
       scene.detach();
     },
     reset() {

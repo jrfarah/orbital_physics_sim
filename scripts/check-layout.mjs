@@ -65,6 +65,12 @@ try {
           await page.waitForTimeout(500);
           const inset = await insetAudit(page);
           offenders.push(...inset.map((item) => `thermal ${width}x${height} ${power} W: ${item}`));
+          if (power === 120e3 || power === 1e9 || power === 1e12) {
+            await page.waitForTimeout(600);
+            offenders.push(
+              ...(await audit(page)).map((item) => `thermal ${width}x${height} settled ${power} W: ${item}`),
+            );
+          }
         }
       }
     }

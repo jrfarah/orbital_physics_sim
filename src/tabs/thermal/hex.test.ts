@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { axialFromIndex, hexOuterRadius, indexFromAxial, ringOf } from './hex';
+import { axialFromIndex, BLOCK_M, blockCount, footprintRadius, hexOuterRadius, indexFromAxial, ringOf } from './hex';
 
 describe('hex spiral', () => {
   it('round-trips index to axial to index through 1e7', () => {
@@ -36,5 +36,22 @@ describe('hex spiral', () => {
       prev = radius;
     }
     expect(hexOuterRadius(1, spacing, rSat)).toBe(rSat);
+  });
+
+  it('keeps the footprint continuous across one gigawatt block', () => {
+    const spacing = 20;
+    const rSat = 9;
+    const at = footprintRadius(BLOCK_M, spacing, rSat);
+    expect(at).toBeCloseTo(hexOuterRadius(BLOCK_M, spacing, rSat), 6);
+    const justUnder = footprintRadius(BLOCK_M - 0.25, spacing, rSat);
+    const justOver = footprintRadius(BLOCK_M + 0.01, spacing, rSat);
+    expect(justUnder).toBeLessThanOrEqual(at + 1e-6);
+    expect(justOver).toBeGreaterThanOrEqual(at - 1e-6);
+    expect(Math.abs(justOver - at) / at).toBeLessThan(1e-3);
+    expect(blockCount(BLOCK_M)).toBe(1);
+    expect(blockCount(BLOCK_M + 1)).toBe(2);
+    expect(blockCount(Math.ceil(10e9 / 120e3))).toBe(10);
+    expect(blockCount(Math.ceil(100e9 / 120e3))).toBe(100);
+    expect(blockCount(Math.ceil(1e12 / 120e3))).toBe(1000);
   });
 });

@@ -145,9 +145,107 @@ export interface HeatMaterial extends MeshStandardMaterial {
   userData: { heat: { value: number }; time: { value: number }; side: { value: number } };
 }
 
+/** Shared by the instanced thermal tiles. Settings write these; the buffers stay put. */
+export const tileLayout = {
+  uSpacing: { value: 1 },
+  uPhylloC: { value: Math.sqrt((1.25 * 5) / Math.PI) },
+  uSide: { value: Math.sqrt(5) * 0.92 },
+  uNTilesFrom: { value: 1 },
+  uNTilesTo: { value: 1 },
+  uChangeT0: { value: 0 },
+  uNRadFrom: { value: 0 },
+  uNRadTo: { value: 0 },
+  uKindT0: { value: 0 },
+  uNSat: { value: 1 },
+  uNow: { value: 0 },
+  uGolden: { value: Math.PI * (3 - Math.sqrt(5)) },
+};
+
+const TILE_PLACE = /* glsl */ `
+attribute float aSatIndex;
+attribute float aTileIndex;
+attribute float aBorn;
+uniform float uSpacing;
+uniform float uPhylloC;
+uniform float uSide;
+uniform float uNTilesFrom;
+uniform float uNTilesTo;
+uniform float uChangeT0;
+uniform float uNRadFrom;
+uniform float uNRadTo;
+uniform float uKindT0;
+uniform float uNSat;
+uniform float uNow;
+uniform float uGolden;
+
+vec2 axialFromSat(float index) {
+  if (index < 0.5) return vec2(0.0);
+  float k = ceil((3.0 + sqrt(max(12.0 * index - 3.0, 0.0))) / 6.0);
+  if (3.0 * k * (k - 1.0) + 1.0 > index + 0.001) k -= 1.0;
+  float j = index - (3.0 * k * (k - 1.0) + 1.0);
+  float side = floor(j / k);
+  float along = j - side * k;
+  float q = -k;
+  float r = k;
+  if (side > 0.5) q += k;
+  if (side > 1.5) { q += k; r -= k; }
+  if (side > 2.5) r -= k;
+  if (side > 3.5) q -= k;
+  if (side > 4.5) { q -= k; r += k; }
+  if (side < 0.5) q += along;
+  else if (side < 1.5) { q += along; r -= along; }
+  else if (side < 2.5) r -= along;
+  else if (side < 3.5) q -= along;
+  else if (side < 4.5) { q -= along; r += along; }
+  else r += along;
+  return vec2(q, r);
+}
+
+float tileSpan() {
+  if (aSatIndex + 0.5 >= uNSat) return 0.0;
+  float lo = min(uNTilesFrom, uNTilesTo);
+  float hi = max(uNTilesFrom, uNTilesTo);
+  if (aTileIndex + 0.5 >= hi) return 0.0;
+  float span = uSide;
+  if (aTileIndex + 0.5 >= lo) {
+    float delay = (aTileIndex - lo) * 0.003;
+    float t = clamp((uNow - uChangeT0 - delay) / 0.25, 0.0, 1.0);
+    t = t * t * (3.0 - 2.0 * t);
+    span *= (uNTilesTo + 0.5 >= uNTilesFrom) ? t : (1.0 - t);
+  }
+  if (aBorn <= 0.0) return 0.0;
+  float delay = min(aTileIndex * 0.003, 0.4);
+  float t = clamp((uNow - aBorn - delay) / 0.25, 0.0, 1.0);
+  t = t * t * (3.0 - 2.0 * t);
+  span *= t;
+  return span;
+}
+
+float tileMix() {
+  float lo = min(uNRadFrom, uNRadTo);
+  float hi = max(uNRadFrom, uNRadTo);
+  if (aTileIndex + 0.5 < lo) return 0.0;
+  if (aTileIndex + 0.5 >= hi) return 1.0;
+  float t = clamp((uNow - uKindT0) / 0.3, 0.0, 1.0);
+  t = t * t * (3.0 - 2.0 * t);
+  return (uNRadTo > uNRadFrom) ? (1.0 - t) : t;
+}
+
+vec3 tileWorld(vec3 local) {
+  vec2 qr = axialFromSat(aSatIndex);
+  float q = qr.x;
+  float r = qr.y;
+  float x = uSpacing * (q + r * 0.5);
+  float z = uSpacing * 0.86602540378 * r;
+  float theta = aTileIndex * uGolden;
+  float rho = uPhylloC * sqrt(aTileIndex + 0.5);
+  vec3 center = vec3(x + cos(theta) * rho, 0.02, z + sin(theta) * rho);
+  return center + local * tileSpan();
+}
+`;
+
 const SOLAR_VERT = /* glsl */ `
-attribute float aScale;
-attribute float aMix;
+${TILE_PLACE}
 varying float vMix;
 varying vec2 vUv;
 varying vec3 vWorld;
@@ -155,15 +253,10 @@ varying vec3 vNormalW;
 
 void main() {
   vUv = uv;
-  vMix = aMix;
-  vec3 p = position * aScale;
-  #ifdef USE_INSTANCING
-    vec4 world = modelMatrix * instanceMatrix * vec4(p, 1.0);
-    vNormalW = normalize(mat3(modelMatrix) * mat3(instanceMatrix) * normal);
-  #else
-    vec4 world = modelMatrix * vec4(p, 1.0);
-    vNormalW = normalize(mat3(modelMatrix) * normal);
-  #endif
+  vMix = tileMix();
+  vec3 p = tileWorld(position);
+  vec4 world = modelMatrix * vec4(p, 1.0);
+  vNormalW = normalize(mat3(modelMatrix) * normal);
   vWorld = world.xyz;
   gl_Position = projectionMatrix * viewMatrix * world;
 }
@@ -312,6 +405,7 @@ export function createSolarMaterial(): ShaderMaterial {
       uDitherGate: ditherGate,
       uDitherMode: ditherMode,
       uLightDir: { value: new Vector3(0.4, 1, 0.7).normalize() },
+      ...tileLayout,
     },
     vertexShader: SOLAR_VERT,
     fragmentShader: SOLAR_FRAG,
@@ -424,7 +518,7 @@ export function createEmberMaterial(
   const side = { value: 1 };
   mat.userData.time = time;
   mat.userData.side = side;
-  mat.customProgramCacheKey = () => (instanced ? 'ember-instanced-v2' : 'heat-face-v6');
+  mat.customProgramCacheKey = () => (instanced ? 'ember-instanced-v3' : 'heat-face-v6');
   if (instanced) {
     mat.transparent = true;
     mat.depthWrite = false;
@@ -445,25 +539,19 @@ export function createEmberMaterial(
       shader.uniforms.uBlue = { value: getBlueNoise() };
       shader.uniforms.uDitherGate = ditherGate;
       shader.uniforms.uDitherMode = ditherMode;
+      Object.assign(shader.uniforms, tileLayout);
     }
     shader.vertexShader = shader.vertexShader
       .replace(
         '#include <common>',
-        `#include <common>\n${
-          instanced
-            ? `attribute float aScale;
-attribute float aMix;
-varying float vMix;
-varying float vSeed;`
-            : ''
-        }`,
+        `#include <common>\n${instanced ? `${TILE_PLACE}\nvarying float vMix;\nvarying float vSeed;` : ''}`,
       )
       .replace(
         '#include <begin_vertex>',
         instanced
-          ? `vec3 transformed = vec3(position) * aScale;
-vMix = aMix;
-vSeed = fract(sin(float(gl_InstanceID + 1) * 12.9898) * 43758.5453);`
+          ? `vec3 transformed = tileWorld(vec3(position));
+vMix = tileMix();
+vSeed = fract(sin((aSatIndex * 256.0 + aTileIndex + 1.0) * 12.9898) * 43758.5453);`
           : '#include <begin_vertex>',
       );
     shader.fragmentShader = shader.fragmentShader

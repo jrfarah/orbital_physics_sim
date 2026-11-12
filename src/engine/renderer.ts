@@ -278,8 +278,14 @@ function frame(now: number): void {
       passStats.triangles = renderer.info.render.triangles;
     }
     const cost = performance.now() - t0;
-    const bucket = (window as Window & { __costs?: number[] }).__costs;
+    const bucket = (window as Window & { __costs?: number[]; __mem?: { geometries: number; textures: number; programs: number } }).__costs;
     if (bucket) bucket.push(cost);
+    const mem = (window as Window & { __mem?: { geometries: number; textures: number; programs: number } }).__mem;
+    if (mem && renderer) {
+      mem.geometries = renderer.info.memory.geometries;
+      mem.textures = renderer.info.memory.textures;
+      mem.programs = renderer.info.programs?.length ?? 0;
+    }
     noteSlow(Math.max(cost, dt * 1000));
     if (active.continuous) noteFrame(cost, now);
     else if (motion) noteCost(cost);
@@ -331,6 +337,32 @@ export function requestRender(): void {
   }
 }
 
+let uploadBytes = 0;
+
+function installUploadCounter(gl: WebGL2RenderingContext): void {
+  const sub = gl.bufferSubData.bind(gl);
+  const data = gl.bufferData.bind(gl);
+  const add = (src: ArrayBufferView | ArrayBuffer | null | undefined) => {
+    if (!src) return;
+    uploadBytes += src.byteLength;
+  };
+  gl.bufferSubData = ((target: number, offset: number, src: ArrayBufferView) => {
+    add(src);
+    return sub(target, offset, src);
+  }) as typeof gl.bufferSubData;
+  gl.bufferData = ((target: number, srcOrSize: ArrayBufferView | ArrayBuffer | number | null, usage: number) => {
+    if (typeof srcOrSize !== 'number') add(srcOrSize);
+    return data(target, srcOrSize as ArrayBufferView, usage);
+  }) as typeof gl.bufferData;
+  const view = window as Window & { __uploads?: { bytes: () => number; reset: () => void } };
+  view.__uploads = {
+    bytes: () => uploadBytes,
+    reset: () => {
+      uploadBytes = 0;
+    },
+  };
+}
+
 export function mountRenderer(container: HTMLElement): void {
   if (renderer) return;
   host = container;
@@ -347,6 +379,7 @@ export function mountRenderer(container: HTMLElement): void {
   renderer.toneMapping = ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.15;
   renderer.setClearColor(0x05070c, 1);
+  installUploadCounter(renderer.getContext() as WebGL2RenderingContext);
   cap = initialRatio();
   adaptive = cap;
   ratio = cap;

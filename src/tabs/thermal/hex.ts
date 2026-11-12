@@ -10,6 +10,11 @@ const DIRS: ReadonlyArray<readonly [number, number]> = [
 ];
 
 export const SATELLITE_W = 120e3;
+export const GIGAWATT = 1e9;
+/** Satellites in one 1 GW block: ceil(1 GW / 120 kW). */
+export const BLOCK_M = Math.ceil(GIGAWATT / SATELLITE_W);
+/** Extra space between block edges so the gaps stay visible. */
+export const BLOCK_GAP = 1.15;
 
 /** Ring of a spiral index. The center cell is ring 0. */
 export function ringOf(index: number): number {
@@ -82,4 +87,28 @@ export function hexOuterRadius(n: number, spacing: number, rSat: number): number
   const start = 3 * k * (k - 1) + 1;
   const fill = Math.min(1, Math.max(0, (last - start + 1) / (6 * k)));
   return (k - 1 + fill) * spacing + rSat;
+}
+
+/** How many 1 GW blocks a satellite count occupies. Block `b` holds indices `[bM, (b+1)M)`. */
+export function blockCount(satellites: number): number {
+  const n = Math.max(0, Math.floor(satellites + 1e-6));
+  if (n <= 0) return 0;
+  return Math.floor((n - 1) / BLOCK_M) + 1;
+}
+
+/** Outer radius of one full block, and the center-to-center pitch of the block grid. */
+export function blockMetrics(spacing: number, rSat: number): { rBlk: number; pitch: number } {
+  const rBlk = hexOuterRadius(BLOCK_M, spacing, rSat);
+  return { rBlk, pitch: 2 * rBlk * BLOCK_GAP };
+}
+
+/**
+ * Radius of the whole constellation. At or below one block this is the satellite
+ * hex; above that it is the hex of blocks. The two agree exactly at N = M.
+ */
+export function footprintRadius(n: number, spacing: number, rSat: number): number {
+  const count = Math.max(n, 1);
+  if (count <= BLOCK_M) return hexOuterRadius(count, spacing, rSat);
+  const block = blockMetrics(spacing, rSat);
+  return hexOuterRadius(count / BLOCK_M, block.pitch, block.rBlk);
 }
