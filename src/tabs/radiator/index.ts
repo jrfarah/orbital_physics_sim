@@ -5,6 +5,7 @@ import { createMoreDetail, createSegmented } from '../../ui/controls';
 import { bigNumber, card, el } from '../../ui/readout';
 import { coalesce } from '../../ui/batch';
 import { requestRender, setActiveView, isMobile } from '../../engine/renderer';
+import { legendColor } from '../../engine/heatMaterial';
 import {
   COATINGS,
   anglesFromNormal,
@@ -17,10 +18,12 @@ import {
   radiator,
 } from '../../physics/radiator';
 import type { Vec3 } from '../../physics/vec';
+import { Vector3 } from 'three';
 import { createHeatLegend, paintFace } from './faces2d';
 import { createRadiatorPanel, type RadiatorControlState } from './panel';
 import { createRadiatorScene } from './scene';
 import { createSpectrumCard } from './spectrumChart';
+import type { FishMode } from './fisheye';
 
 const DEG = Math.PI / 180;
 
@@ -87,6 +90,34 @@ export function createRadiatorTab(summary: (text: string) => void) {
   key.body.append(keyNum.el, compare, sentence, warning);
 
   const breakdown = el('div');
+  const pattern = el('div');
+  pattern.append(el('div', 'field-label', 'Heat pattern'));
+  const patternRow = el('div', 'heat-pattern');
+  const patA = document.createElement('canvas');
+  const patB = document.createElement('canvas');
+  patA.style.width = '96px';
+  patB.style.width = '96px';
+  patternRow.append(patA, patB);
+  pattern.append(patternRow);
+  let fishMode: FishMode = 'camera';
+  let poseKey = '';
+  const fishNote = el('div', 'caption', 'Sun drawn enlarged');
+  const heatNote = el('div', 'caption', 'Area on this disk = share of heat received');
+  heatNote.hidden = true;
+  const fishPick = createSegmented<FishMode>({
+    id: 'rad-fisheye',
+    options: [
+      { value: 'camera', label: 'Camera view' },
+      { value: 'heat', label: 'Heat-weighted' },
+    ],
+    value: 'camera',
+    onChange: (value) => {
+      fishMode = value;
+      heatNote.hidden = value !== 'heat';
+      poseKey = '';
+      coalesce(wrapped);
+    },
+  });
   const faces = el('div', 'faces');
   const faceA = faceCard('A');
   const faceB = faceCard('B');
@@ -94,8 +125,8 @@ export function createRadiatorTab(summary: (text: string) => void) {
   const legend = createHeatLegend();
   const spectrum = createSpectrumCard();
   const foot = el('div', 'faint');
-  const more = createMoreDetail('radiator', [breakdown, foot]);
-  hud.append(key.element, faces, legend.element, spectrum.element, more);
+  const more = createMoreDetail('radiator', [pattern, breakdown, foot]);
+  hud.append(key.element, fishPick.element, fishNote, heatNote, faces, legend.element, spectrum.element, more);
   const cameraPick = createSegmented<'overview' | 'sat'>({
     id: 'rad-camera',
     options: [
@@ -198,6 +229,7 @@ export function createRadiatorTab(summary: (text: string) => void) {
     warning.hidden = total >= 0;
     paintFaceCard(faceA, 'A', result.A);
     paintFaceCard(faceB, 'B', result.B);
+    maybeCapture(frame.up, frame.north, n);
     legend.setMarkers(result.A.T_sink, result.B.T_sink);
     const selected = state.face === 'A' ? result.A : result.B;
     spectrum.setFace(state.face, selected, coat.eps, state.tempK);
@@ -208,39 +240,39 @@ export function createRadiatorTab(summary: (text: string) => void) {
     requestRender();
   }
 
+  function maybeCapture(zenith: Vec3, north: Vec3, normal: Vec3): void {
+    const key = [state.hKm, state.phi, state.theta, state.tilt, state.heading, fishMode].join('|');
+    if (key === poseKey) return;
+    poseKey = key;
+    const up = new Vector3(zenith[0], zenith[1], zenith[2]);
+    const nrm = new Vector3(north[0], north[1], north[2]);
+    const n = new Vector3(normal[0], normal[1], normal[2]);
+    scene.captureFisheye(
+      [
+        { normal: n, zenith: up, north: nrm, canvas: faceA.canvas },
+        { normal: n.clone().multiplyScalar(-1), zenith: up, north: nrm, canvas: faceB.canvas },
+      ],
+      fishMode,
+    );
+  }
+
   function paintFaceCard(face: ReturnType<typeof faceCard>, which: 'A' | 'B', flux: ReturnType<typeof radiator>['A']): void {
     face.root.classList.toggle('selected', state.face === which);
-    paintFace(face.canvas, Math.min(1, Math.max(0, (flux.T_sink - 1) / 399)));
-    const temp = flux.T_sink;
-    face.temp.textContent = `Sees ${fmtSig(temp)} K`;
-    face.celsius.textContent = `${Math.round(temp - 273)} °C`;
+    const sun = flux.q_sun > 0 ? ' · Sun in view' : '';
+    face.fill.textContent = `Earth fills ${Math.round(flux.F * 100)}%${sun}`;
+    const heat = Math.min(1, Math.max(0, (flux.T_sink - 1) / 399));
+    const rgb = legendColor(heat);
+    face.swatch.style.background = `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
+    paintFace(which === 'A' ? patA : patB, heat);
+    face.temp.textContent = `Sees ${fmtSig(flux.T_sink)} K`;
     const parts = [
       { v: flux.q_sun, color: '#ffd36b', name: 'Sunlight' },
       { v: flux.q_alb, color: '#7fb6ff', name: 'Sunlight reflected off Earth' },
       { v: flux.q_ir, color: '#ff8a5c', name: "Earth's infrared glow" },
       { v: flux.q_cmb, color: '#b58cff', name: 'Cosmic microwave background' },
     ];
-    const sum = parts.reduce((a, p) => a + p.v, 0) || 1;
-    face.stack.replaceChildren();
     face.legend.replaceChildren(el('div', 'field-label', `Face ${which}`));
     for (const part of parts) {
-      const seg = el('i');
-      seg.style.width = `${(part.v / sum) * 100}%`;
-      seg.style.background = part.color;
-      const tip = el('div', 'tip', `${part.name}: ${fmtSig(part.v)} W/m²`);
-      tip.hidden = true;
-      seg.append(tip);
-      const show = (event: Event) => {
-        event.stopPropagation();
-        for (const other of face.stack.querySelectorAll('.tip')) other.toggleAttribute('hidden', other !== tip);
-        tip.hidden = false;
-      };
-      seg.addEventListener('pointerenter', show);
-      seg.addEventListener('pointerleave', () => {
-        tip.hidden = true;
-      });
-      seg.addEventListener('click', show);
-      face.stack.append(seg);
       face.legend.append(el('div', 'faint', `${part.name}: ${fmtSig(part.v)} W/m²`));
     }
     face.shed.textContent = `Sheds ${fmtSig(flux.q_net)} W/m²`;
@@ -248,22 +280,28 @@ export function createRadiatorTab(summary: (text: string) => void) {
 
   function faceCard(which: 'A' | 'B') {
     const root = el('article', 'card face');
-    const canvas = document.createElement('canvas');
-    canvas.style.width = '100%';
     const title = el('div', 'field-label', `Face ${which}`);
+    const view = el('div', 'fisheye');
+    const canvas = document.createElement('canvas');
+    canvas.width = 256;
+    canvas.height = 256;
+    const rim = el('div', 'rim');
+    const fill = el('div', 'fill');
+    view.append(canvas, rim, fill);
+    const tempRow = el('div', 'face-temp');
+    const swatch = el('i', 'swatch');
     const temp = el('div', 'num-lg');
-    const celsius = el('div', 'caption');
-    const stack = el('div', 'stack');
-    const legendRow = el('div');
+    tempRow.append(swatch, temp);
     const shed = el('div', 'caption');
-    root.append(title, canvas, temp, celsius, stack, shed);
+    const legendRow = el('div');
+    root.append(title, view, tempRow, shed);
     breakdown.append(legendRow);
     root.addEventListener('click', () => {
       state.face = which;
       spectrum.open();
       recompute();
     });
-    return { root, canvas, temp, celsius, stack, legend: legendRow, shed };
+    return { root, canvas, fill, swatch, temp, legend: legendRow, shed };
   }
 
   let dragArmed = false;

@@ -6,6 +6,7 @@ import {
   RGBAFormat,
   SRGBColorSpace,
   UnsignedByteType,
+  Vector2,
   type WebGLProgramParametersWithUniforms,
 } from 'three';
 import { getNoiseTexture, sampleNoise } from './noise';
@@ -131,19 +132,29 @@ export interface HeatMaterial extends MeshStandardMaterial {
   userData: { heat: { value: number } };
 }
 
-export function createHeatMaterial(heat01 = 0, tiles = false): HeatMaterial {
+export function createHeatMaterial(
+  heat01 = 0,
+  tiles = false,
+  noise: { offset: [number, number]; rotation: number } = { offset: [0, 0], rotation: 0 },
+): HeatMaterial {
   const heat = { value: heat01 };
+  const noiseOffset = { value: new Vector2(noise.offset[0], noise.offset[1]) };
+  const noiseRotation = { value: noise.rotation };
   const mat = new MeshStandardMaterial({
     color: 0x3d424a,
     metalness: 0.85,
     roughness: 0.38,
     map: whiteMap(),
+    envMap: null,
+    envMapIntensity: 0,
   }) as HeatMaterial;
   mat.userData.heat = heat;
-  mat.customProgramCacheKey = () => (tiles ? 'heat-tiles-v2' : 'heat-face-v2');
+  mat.customProgramCacheKey = () => (tiles ? 'heat-tiles-v2' : 'heat-face-v3');
   mat.onBeforeCompile = (shader: WebGLProgramParametersWithUniforms) => {
     shader.uniforms.uHeat = heat;
     shader.uniforms.uNoise = { value: getNoiseTexture() };
+    shader.uniforms.uNoiseOffset = noiseOffset;
+    shader.uniforms.uNoiseRotation = noiseRotation;
     shader.vertexShader = shader.vertexShader
       .replace(
         '#include <common>',
@@ -159,6 +170,8 @@ export function createHeatMaterial(heat01 = 0, tiles = false): HeatMaterial {
         `#include <common>
 uniform float uHeat;
 uniform sampler2D uNoise;
+uniform vec2 uNoiseOffset;
+uniform float uNoiseRotation;
 ${tiles ? 'varying float vMix;' : ''}
 ${HEAT_GLSL}`,
       )
@@ -166,6 +179,9 @@ ${HEAT_GLSL}`,
         '#include <map_fragment>',
         `#include <map_fragment>
 vec2 heatUv = vMapUv;
+float cs = cos(uNoiseRotation);
+float sn = sin(uNoiseRotation);
+heatUv = mat2(cs, sn, -sn, cs) * heatUv + uNoiseOffset;
 float n = texture2D(uNoise, heatUv).r;
 float edge = 1.0 - smoothstep(0.0, 0.5, min(min(heatUv.x, 1.0-heatUv.x), min(heatUv.y, 1.0-heatUv.y)));
 float field = 0.65 * n + 0.35 * (1.0 - edge);

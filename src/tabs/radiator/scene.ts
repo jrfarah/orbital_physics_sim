@@ -14,6 +14,7 @@ import {
   LineSegments,
   Mesh,
   MeshStandardMaterial,
+  Object3D,
   Raycaster,
   Scene,
   Sphere,
@@ -30,6 +31,7 @@ import { createEarth } from '../../engine/earth';
 import { createHeatMaterial, setHeat, type HeatMaterial } from '../../engine/heatMaterial';
 import { clearUserOrbit, createControls, makeCamera, reducedMotion, requestRender, userHasOrbited, type TabView } from '../../engine/renderer';
 import { createStarfield, createSunSprite } from '../../engine/starfield';
+import { createLiveFisheye, type FishFace, type FishMode } from './fisheye';
 
 function heat01(t: number): number {
   return Math.min(1, Math.max(0, (t - 1) / 399));
@@ -71,17 +73,18 @@ function writeCircle(attr: BufferAttribute, radius: number, center: Vector3, a: 
 export function createRadiatorScene(mobile: boolean, tag: HTMLElement) {
   const scene = new Scene();
   scene.add(createStarfield(mobile));
-  scene.add(createSunSprite());
+  const sunSprite = createSunSprite();
+  sunSprite.layers.set(1);
+  scene.add(sunSprite);
   const earth = createEarth(mobile);
   scene.add(earth.group);
   scene.add(earth.sun);
   scene.add(earth.ambient);
 
-  const matA = createHeatMaterial(0);
-  const matB = createHeatMaterial(0);
-  const edge = new MeshStandardMaterial({ color: 0x2a2e34, metalness: 0.85, roughness: 0.45 });
+  const matA = createHeatMaterial(0, false, { offset: [0.13, 0.71], rotation: 0.6 });
+  const matB = createHeatMaterial(0, false, { offset: [0.58, 0.22], rotation: 2.1 });
+  const edge = new MeshStandardMaterial({ color: 0x2a2e34, metalness: 0.85, roughness: 0.45, envMap: null, envMapIntensity: 0 });
   const panel = new Mesh(new BoxGeometry(0.14, 0.09, 0.006), [edge, edge, edge, edge, matA, matB]);
-  panel.layers.enable(1);
   const outline = new LineSegments(
     new EdgesGeometry(panel.geometry),
     new LineBasicMaterial({ color: 0x5ce1ff, blending: AdditiveBlending, transparent: true, toneMapped: false }),
@@ -115,13 +118,29 @@ export function createRadiatorScene(mobile: boolean, tag: HTMLElement) {
   views.add(orbit, horizon, lineA, lineB);
   scene.add(views);
 
+  const only = (obj: Object3D) => {
+    obj.traverse((node) => node.layers.set(1));
+  };
+  only(panel);
+  only(labelA);
+  only(labelB);
+  only(arrowA);
+  only(arrowB);
+  only(views);
+  const fisheye = createLiveFisheye(scene, mobile);
+
   const camera = makeCamera();
+  camera.near = 0.001;
+  camera.layers.enable(1);
+  camera.updateProjectionMatrix();
   camera.position.set(2.4, 1.2, 2.4);
-  let controls = createControls(camera, { min: 0.45, max: 12 });
+  let controls = createControls(camera, { min: 0.02, max: 12 });
   controls.target.set(0, 0, 0);
   controls.update();
 
   let preset: 'overview' | 'sat' = 'sat';
+  let localEast = new Vector3(1, 0, 0);
+  const panelPos = new Vector3();
   const earthSphere = new Sphere(new Vector3(), 1);
   const overlay = document.createElement('div');
   overlay.className = 'stage-overlay';
@@ -188,10 +207,11 @@ export function createRadiatorScene(mobile: boolean, tag: HTMLElement) {
     const normal = new Vector3().setFromMatrixColumn(panel.matrix, 2);
     if (normal.lengthSq() < 1e-8) normal.copy(radial);
     normal.normalize();
-    const side = new Vector3().crossVectors(normal, radial);
-    if (side.lengthSq() < 1e-8) side.crossVectors(new Vector3(0, 1, 0), radial);
-    side.normalize();
-    const pos = panel.position.clone().addScaledVector(radial, 0.22).addScaledVector(side, 0.18);
+    const east = localEast.clone();
+    if (east.lengthSq() < 1e-8) east.crossVectors(new Vector3(0, 1, 0), radial);
+    east.normalize();
+    const lift = Math.hypot(0.06, 0.07) * Math.tan((35 * Math.PI) / 180);
+    const pos = panel.position.clone().addScaledVector(radial, 0.06).addScaledVector(east, 0.07).addScaledVector(normal, lift);
     return { pos, target };
   }
 
@@ -370,6 +390,7 @@ export function createRadiatorScene(mobile: boolean, tag: HTMLElement) {
       const n = v3(nHat).normalize();
       const e = v3(east).normalize();
       const radial = r.clone().normalize();
+      localEast.copy(e);
       const satR = 1 + hKm / R_E;
       const pos = radial.clone().multiplyScalar(satR);
       let x = new Vector3().crossVectors(e, n);
@@ -378,6 +399,7 @@ export function createRadiatorScene(mobile: boolean, tag: HTMLElement) {
       x.normalize();
       const y = new Vector3().crossVectors(n, x).normalize();
       panel.position.copy(pos);
+      panelPos.copy(pos);
       panel.matrix.makeBasis(x, y, n);
       panel.matrix.setPosition(pos);
       panel.matrixAutoUpdate = false;
@@ -405,9 +427,13 @@ export function createRadiatorScene(mobile: boolean, tag: HTMLElement) {
       views.visible = showView;
       sphere.radius = satR;
     },
+    captureFisheye(faces: FishFace[], mode: FishMode) {
+      fisheye.request(panelPos, faces, mode);
+    },
     dispose() {
       controls.dispose();
       earth.dispose();
+      fisheye.dispose();
       panel.geometry.dispose();
       edge.dispose();
       (matA as HeatMaterial).dispose();

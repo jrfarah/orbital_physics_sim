@@ -46,6 +46,9 @@ const vertex = /* glsl */ `
 const finish = /* glsl */ `
   #ifdef TONE_MAPPING
     color = toneMapping(color);
+  #else
+    color *= 1.15;
+    color = clamp((color * (2.51 * color + 0.03)) / (color * (2.43 * color + 0.59) + 0.14), 0.0, 1.0);
   #endif
   gl_FragColor = linearToOutputTexel(vec4(color, alpha));
 `;

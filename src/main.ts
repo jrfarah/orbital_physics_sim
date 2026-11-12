@@ -9,6 +9,7 @@ import './styles/components.css';
 import { content } from './content';
 import { mountRenderer } from './engine/renderer';
 import { paintFace } from './tabs/radiator/faces2d';
+import { measureViewFactors } from './tabs/radiator/fisheye';
 import { createRadiatorTab } from './tabs/radiator';
 import { createThermalTab } from './tabs/thermal';
 import { createKesslerTab } from './tabs/kessler';
@@ -125,6 +126,30 @@ function route(): void {
   if (name === 'heat-debug') {
     debug.hidden = false;
     hudEl.hidden = true;
+    return;
+  }
+  document.getElementById('viewfactor-results')?.remove();
+  if (name === 'debug/viewfactor') {
+    debug.hidden = true;
+    hudEl.hidden = true;
+    const box = el('pre', 'card');
+    box.id = 'viewfactor-results';
+    box.textContent = 'Measuring view factors…';
+    document.getElementById('stage')?.append(box);
+    void measureViewFactors()
+      .then((rows) => {
+        const lines = rows.map((row) => {
+          const ok = Math.abs(row.got - row.expected) <= 0.015;
+          return `${row.name} ${row.face}: got ${row.got.toFixed(3)} expected ${row.expected.toFixed(3)} ${ok ? 'ok' : 'FAIL'}`;
+        });
+        const pass = lines.every((line) => line.endsWith('ok'));
+        box.textContent = lines.join('\n');
+        document.body.dataset.viewfactor = pass ? 'pass' : 'fail';
+      })
+      .catch((err: unknown) => {
+        box.textContent = String(err);
+        document.body.dataset.viewfactor = 'fail';
+      });
     return;
   }
   debug.hidden = true;
