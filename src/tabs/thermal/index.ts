@@ -9,7 +9,8 @@ import { span } from '../../engine/marks';
 import { holdMotion } from '../../engine/motion';
 import { reducedMotion, setActiveView } from '../../engine/renderer';
 import { createThermalCharts } from './charts';
-import { createThermalScene, footprintRadius } from './scene';
+import { SATELLITE_W } from './hex';
+import { arrayRadius, createThermalScene } from './scene';
 
 const SNAPS = [
   { label: '120 kW', watts: 120e3 },
@@ -101,7 +102,8 @@ export function createThermalTab(summary: (text: string) => void) {
   hero.body.append(stats, delta);
 
   const table = el('div');
-  const more = createMoreDetail('thermal', [table, charts.detail]);
+  const packNote = el('p', 'caption', 'Satellites shown packed edge to edge (~10% gaps); in orbit they would be spread across the sky.');
+  const more = createMoreDetail('thermal', [table, charts.detail, packNote]);
   hud.append(hero.element, charts.element, more);
 
   const gpu = createSlider({
@@ -377,11 +379,15 @@ export function createThermalTab(summary: (text: string) => void) {
     const input = inputFor(p);
     const result = span('physics recompute', () => thermalBudget(input));
     const bare = thermalBudget({ ...input, pump: false, T_hot: null });
+    const unit = thermalBudget({ ...input, P: SATELLITE_W });
     scene.layout(
       {
         aRad: result.A_rad,
         aTot: result.A_tot,
         tHot: result.T_hot,
+        count: p / SATELLITE_W,
+        unitRad: unit.A_rad,
+        unitTot: unit.A_tot,
       },
       drag,
       mode,
@@ -390,7 +396,7 @@ export function createThermalTab(summary: (text: string) => void) {
     scene.setRings(
       span('ring update', () => below.slice(-3).reverse().map((mark) => ({
         label: mark.label,
-        radius: footprintRadius(thermalBudget({ ...input, P: mark.watts }).A_tot),
+        radius: arrayRadius(mark.watts / SATELLITE_W, unit.A_rad, unit.A_tot),
       }))),
     );
     total.set(fmtArea(result.A_tot));
@@ -420,7 +426,9 @@ export function createThermalTab(summary: (text: string) => void) {
     }, { score: Infinity, ref: REFERENCE_AREAS[0]! });
     const k = result.A_tot / closest.ref.m2;
     const kText = k >= 10 ? String(Math.round(k)) : k.toFixed(1);
-    caption.textContent = `${fmtPower(p)}: ${fmtArea(result.A_tot)} of solar + radiator ≈ ${kText}× ${FOOT_NAME[closest.ref.id] ?? closest.ref.label}`;
+    const sats = Math.max(1, Math.ceil(p / SATELLITE_W - 1e-9));
+    const satText = sats >= 1e6 ? `${(sats / 1e6).toFixed(1)} million` : sats.toLocaleString('en-US');
+    caption.textContent = `${fmtPower(p)}: ${satText} satellites, ${fmtArea(result.A_tot)} of solar + radiator, packed together for comparison ≈ ${kText}× ${FOOT_NAME[closest.ref.id] ?? closest.ref.label}`;
     summary(`${fmtArea(result.A_tot)} · ${fmtPower(p)}`);
   }
 

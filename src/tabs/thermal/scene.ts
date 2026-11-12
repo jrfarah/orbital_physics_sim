@@ -22,7 +22,7 @@ import { Line2 } from 'three/examples/jsm/lines/Line2.js';
 import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import { CSS2DObject, CSS2DRenderer } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
-import { createEmberMaterial, createSolarMaterial, setDither, setHeat, setTilePx, type HeatMaterial } from '../../engine/heatMaterial';
+import { createEmberMaterial, createSolarMaterial, emberLinear, setDither, setHeat, setTilePx, type HeatMaterial } from '../../engine/heatMaterial';
 import { span } from '../../engine/marks';
 import { holdMotion } from '../../engine/motion';
 import { LAYER_EMBER, prewarmBloom } from '../../engine/post';
@@ -38,7 +38,8 @@ import {
   type TabView,
 } from '../../engine/renderer';
 import { el } from '../../ui/readout';
-import { createConstellationMesh } from './constellation';
+import { constellationMaterial, createConstellationMesh } from './constellation';
+import { axialFromIndex, axialToWorld, hexOuterRadius } from './hex';
 import { mountScaleInset } from './inset';
 
 const RING_SEGMENTS = 96;
@@ -50,13 +51,20 @@ for (let s = 0; s <= RING_SEGMENTS; s++) {
 }
 
 const GOLDEN = Math.PI * (3 - Math.sqrt(5));
-const MAX = 2600;
+const TILE = 5;
+const TILE_CAP = 256;
+const NEAR_CAP = 150;
+const MAX = NEAR_CAP * TILE_CAP;
 const FADE_MS = 250;
 const RING_OPACITY = [0.55, 0.35, 0.2];
 export interface ThermalLayout {
   aRad: number;
   aTot: number;
   tHot: number;
+  /** Float satellite count, P / 120 kW. The rim eases because this is not rounded. */
+  count: number;
+  unitRad: number;
+  unitTot: number;
 }
 export interface MilestoneRing {
   label: string;
@@ -118,7 +126,9 @@ export function createThermalScene(overlay: HTMLElement) {
   scene.add(hex);
 
   const slots = [makeSlot(), makeSlot()];
-  scene.add(slots[0].mesh, slots[0].solar, slots[1].mesh, slots[1].solar);
+  const field = createConstellationMesh();
+  scene.add(slots[0].mesh, slots[0].solar, slots[1].mesh, slots[1].solar, field);
+  const fieldEmber = new Vector3(0.4, 0.05, 0.02);
   let emberHeat = 0;
   let shown = 0;
   let outer = 4;
@@ -127,11 +137,18 @@ export function createThermalScene(overlay: HTMLElement) {
   let userAdjusted = false;
   let wake = '';
   let clipDist = -1;
-  let heldK = -1;
-  let heldAt = 0;
   let queuedK = -1;
   let lastRad = 0;
   let lastTot = 1;
+  let liveN = 1;
+  let liveFoot = satelliteFootprint(1, 1);
+  let shownNear = true;
+  let fieldFade: { kind: 'full' | 'window'; toDetail: boolean; t0: number } | null = null;
+  let windowed = false;
+  let driven = false;
+  let paintKey = '';
+  let paintedSats = 0;
+  let tilesNow = 1;
 
   const chip = el('div', 'tile-chip', '1 tile = 5 m²');
   const fitBtn = el('button', 'fit-btn', 'Fit') as HTMLButtonElement;
@@ -187,6 +204,7 @@ export function createThermalScene(overlay: HTMLElement) {
   function onStart(): void {
     setZoom(null);
     userAdjusted = true;
+    driven = false;
   }
   function fitClip(force = false): void {
     const distance = camera.position.length();
@@ -212,18 +230,160 @@ export function createThermalScene(overlay: HTMLElement) {
     if (had !== (fade !== null)) holdMotion(fade !== null);
   }
 
+  function fmtSatellites(n: number): string {
+    if (n >= 1e6) {
+      const millions = n / 1e6;
+      return `${millions >= 10 ? millions.toFixed(0) : millions.toFixed(1)} million`;
+    }
+    return Math.round(n).toLocaleString('en-US');
+  }
+
+  function pxAt(rSat: number, dist: number): number {
+    const h = overlay.clientHeight || 600;
+    const fov = (camera.fov * Math.PI) / 180;
+    return ((2 * rSat) / Math.max(dist, 1e-3)) * (h / 2) / Math.tan(fov / 2);
+  }
+
+  function setDiscDither(mode: 'in' | 'out' | 'off', gate: number): void {
+    constellationMaterial.uniforms.uDitherGate!.value = gate;
+    constellationMaterial.uniforms.uDitherMode!.value = mode === 'in' ? 1 : mode === 'out' ? 0 : -1;
+  }
+
+  function holeCount(): number {
+    return Math.min(NEAR_CAP, Math.max(0, Math.floor(liveN + 1e-6)));
+  }
+
+  function chooseField(px: number): void {
+    if (fieldFade) return;
+    const wantFull = shownNear ? px >= 32 && liveN <= NEAR_CAP * 1.2 : px >= 40 && liveN <= NEAR_CAP;
+    const wantWin = !wantFull && liveN > NEAR_CAP && (windowed ? px >= 32 : px >= 40);
+    if (wantFull === shownNear && wantWin === windowed) return;
+    if (reducedMotion()) {
+      shownNear = wantFull;
+      windowed = wantWin;
+      field.visible = !wantFull;
+      setDiscDither('off', 1);
+      setSlotDither(slots[0]!, 'off', 1);
+      constellationMaterial.uniforms.uHole!.value = wantWin ? holeCount() : -1;
+      return;
+    }
+    fieldFade = {
+      kind: wantFull || shownNear ? 'full' : 'window',
+      toDetail: wantFull || wantWin,
+      t0: performance.now(),
+    };
+    shownNear = wantFull;
+    windowed = wantWin;
+    field.visible = true;
+    holdMotion(true);
+  }
+
+  function syncDisc(heat: number): void {
+    const ember = emberLinear(heat);
+    const boost = 0.4 + 0.9 * Math.pow(Math.max(heat, 0), 1.25);
+    fieldEmber.set(ember[0] * boost, ember[1] * boost, ember[2] * boost);
+    const radius = hexOuterRadius(Math.max(liveN, 1), liveFoot.spacing, liveFoot.rSat) + liveFoot.spacing;
+    field.scale.set(radius, radius, radius);
+    const uniforms = constellationMaterial.uniforms;
+    uniforms.uN!.value = liveN;
+    uniforms.uSpacing!.value = liveFoot.spacing;
+    uniforms.uRSat!.value = liveFoot.rSat;
+    uniforms.uRRad!.value = liveFoot.rRad;
+    uniforms.uHole!.value = windowed || fieldFade?.kind === 'window' ? holeCount() : -1;
+    (uniforms.uEmber!.value as Vector3).copy(fieldEmber);
+    if (!fieldFade) field.visible = !shownNear;
+  }
+
+  function clearTiles(): void {
+    const slot = slots[0]!;
+    if (slot.mesh.count !== 0) {
+      slot.mesh.count = 0;
+      slot.solar.count = 0;
+      slot.count = 0;
+    }
+  }
+
+  function paintSatellites(): void {
+    const slot = slots[0]!;
+    const key = `${liveFoot.tiles}:${liveFoot.nRad}:${liveFoot.spacing.toFixed(5)}`;
+    if (key !== paintKey) {
+      paintKey = key;
+      paintedSats = 0;
+      slot.hot.length = 0;
+      slot.hotOn.fill(0);
+    }
+    const drawN = Math.min(NEAR_CAP, Math.max(0, Math.floor(liveN + 1e-6)));
+    const now = performance.now();
+    const tiles = liveFoot.tiles;
+    if (drawN > paintedSats) {
+      let lo = MAX;
+      let hi = -1;
+      for (let sat = paintedSats; sat < drawN; sat++) {
+        const [q, r] = axialFromIndex(sat);
+        const [cx, cz] = axialToWorld(q, r, liveFoot.spacing);
+        for (let tile = 0; tile < tiles; tile++) {
+          const index = sat * tiles + tile;
+          const theta = tile * GOLDEN;
+          const rho = liveFoot.c * Math.sqrt(tile + 0.5);
+          dummy.position.set(cx + Math.cos(theta) * rho, 0.02, cz + Math.sin(theta) * rho);
+          dummy.rotation.set(0, 0, 0);
+          dummy.scale.set(1, 1, 1);
+          dummy.updateMatrix();
+          slot.mesh.setMatrixAt(index, dummy.matrix);
+          slot.solar.setMatrixAt(index, dummy.matrix);
+          slot.born[index] = fieldFade ? now - 2000 : now;
+          slot.die[index] = 0;
+          const target = tile < liveFoot.nRad ? 0 : 1;
+          slot.mixNow[index] = target;
+          slot.mixTo[index] = target;
+          if (!slot.hotOn[index]) {
+            slot.hotOn[index] = 1;
+            slot.hot.push(index);
+          }
+          if (index < lo) lo = index;
+          if (index > hi) hi = index;
+        }
+      }
+      if (hi >= lo) {
+        const start = lo * 16;
+        const count = (hi - lo + 1) * 16;
+        slot.mesh.instanceMatrix.clearUpdateRanges();
+        slot.solar.instanceMatrix.clearUpdateRanges();
+        slot.mesh.instanceMatrix.addUpdateRange(start, count);
+        slot.solar.instanceMatrix.addUpdateRange(start, count);
+        slot.mesh.instanceMatrix.needsUpdate = true;
+        slot.solar.instanceMatrix.needsUpdate = true;
+      }
+      paintedSats = drawN;
+    }
+    const drawn = drawN * tiles;
+    slot.count = drawn;
+    slot.mesh.count = drawn;
+    slot.solar.count = drawn;
+    slot.side = liveFoot.side;
+  }
+
   function layout(next: ThermalLayout, drag = false, follow: 'fit' | 'track' | 'out' | 'auto' = 'auto'): void {
     const area = Math.max(next.aTot, 1);
     lastRad = next.aRad;
     lastTot = area;
-    const k = pickK(area, slots[shown]!.k);
-    const slot = span('level switch', () => ensureLevel(k, drag, follow === 'track'));
+    liveFoot = satelliteFootprint(next.unitRad, next.unitTot);
+    liveN = Math.max(0, next.count);
+    tilesNow = liveFoot.tiles;
+    outer = hexOuterRadius(Math.max(liveN, 1), liveFoot.spacing, liveFoot.rSat);
+    driven = follow === 'track' || follow === 'fit';
+    const tracking = driven || (follow === 'auto' && !userAdjusted && !drag);
+    const dist = tracking ? distanceFor(0.75) : Math.max(camera.position.length(), 1e-3);
+    span('level switch', () => chooseField(pxAt(liveFoot.rSat, dist)));
     const heat = Math.min(1, Math.max(0, (next.tHot - 1) / 649));
     emberHeat = heat;
     setHeat(slots[0]!.mat, heat);
     setHeat(slots[1]!.mat, heat);
-    span('tile attribute writes', () => fill(slot, next.aRad, area));
-    const text = `1 tile = ${Math.round(slot.area).toLocaleString('en-US')} m²`;
+    syncDisc(heat);
+    if (shownNear || windowed || fieldFade) span('tile attribute writes', () => paintSatellites());
+    else clearTiles();
+    const shownCount = Math.max(1, Math.ceil(liveN - 1e-9));
+    const text = `${fmtSatellites(shownCount)} satellites · 1 satellite = 120 kW`;
     if (chip.textContent !== text) {
       chip.textContent = text;
       chip.classList.add('flash');
@@ -242,54 +402,6 @@ export function createThermalScene(overlay: HTMLElement) {
       considerZoom();
     }
     requestRender();
-  }
-
-  function ensureLevel(k: number, drag: boolean, track: boolean): Slot {
-    const front = slots[shown]!;
-    if (track) {
-      if (fade) {
-        const incoming = slots[fade.to]!;
-        if (incoming.k !== k) {
-          prepareSlot(incoming, k);
-          const old = slots[fade.from]!;
-          old.mesh.count = 0;
-          old.solar.count = 0;
-          old.hot.length = 0;
-          old.hotOn.fill(0);
-          setSlotDither(incoming, 'off', 1);
-          setSlotDither(old, 'off', 1);
-          setFade(null);
-        }
-        queuedK = -1;
-        return slots[shown]!;
-      }
-      if (front.k === k) return front;
-      queuedK = -1;
-      heldK = -1;
-      return switchTo(k, true);
-    }
-    if (front.k === k) {
-      queuedK = -1;
-      heldK = -1;
-      return front;
-    }
-    if (drag) {
-      if (heldK !== k) {
-        heldK = k;
-        heldAt = performance.now();
-        return front;
-      }
-      if (performance.now() - heldAt < 150) return front;
-    } else {
-      heldK = -1;
-    }
-    if (fade) {
-      queuedK = k;
-      return front;
-    }
-    queuedK = -1;
-    heldK = -1;
-    return switchTo(k);
   }
 
   function prepareSlot(slot: Slot, k: number): void {
@@ -433,7 +545,7 @@ export function createThermalScene(overlay: HTMLElement) {
       return slot.side * (1 - smooth(t));
     }
     if (reducedMotion()) return slot.side;
-    const delay = Math.min(index * 3, 400);
+    const delay = Math.min((index % Math.max(tilesNow, 1)) * 3, 400);
     const t = Math.min(1, Math.max(0, (now - slot.born[index]! - delay) / 250));
     return slot.side * smooth(t);
   }
@@ -461,7 +573,7 @@ export function createThermalScene(overlay: HTMLElement) {
       if (i > hi) hi = i;
       const popping = slot.die[i]! > 0
         ? !instant && now - slot.die[i]! < 280
-        : !instant && now < slot.born[i]! + Math.min(i * 3, 400) + 250;
+        : !instant && now < slot.born[i]! + Math.min((i % Math.max(tilesNow, 1)) * 3, 400) + 250;
       const mixing = Math.abs(mix - target) > 0.004;
       if (popping || mixing) {
         live = true;
@@ -558,7 +670,40 @@ export function createThermalScene(overlay: HTMLElement) {
         const now = performance.now();
         const reasons: string[] = [];
         let live = tickSlot(slots[shown]!, now, dt);
+        if (slots[0] !== slots[shown]) live = tickSlot(slots[0]!, now, dt) || live;
         if (live) reasons.push('tile-tween');
+        if (!driven && zoom === null) {
+          const prev = `${shownNear}:${windowed}:${fieldFade !== null}`;
+          chooseField(pxAt(liveFoot.rSat, Math.max(camera.position.length(), 1e-3)));
+          if (prev !== `${shownNear}:${windowed}:${fieldFade !== null}`) {
+            if (shownNear || windowed || fieldFade) paintSatellites();
+            else clearTiles();
+            syncDisc(emberHeat);
+          }
+        }
+        if (fieldFade) {
+          const t = Math.min(1, (now - fieldFade.t0) / FADE_MS);
+          const gate = reducedMotion() ? 1 : smooth(t);
+          if (fieldFade.toDetail) {
+            setSlotDither(slots[0]!, 'in', gate);
+            setDiscDither('out', gate);
+          } else {
+            setSlotDither(slots[0]!, 'out', gate);
+            setDiscDither('in', gate);
+          }
+          field.visible = true;
+          if (t >= 1) {
+            setSlotDither(slots[0]!, 'off', 1);
+            setDiscDither('off', 1);
+            field.visible = !shownNear;
+            if (!shownNear && !windowed) clearTiles();
+            constellationMaterial.uniforms.uHole!.value = windowed ? holeCount() : -1;
+            fieldFade = null;
+            holdMotion(false);
+          }
+          live = true;
+          reasons.push('cross-fade');
+        }
           if (fade) {
           const other = slots[fade.from]!;
           live = tickSlot(other, now, dt) || live;
@@ -737,45 +882,34 @@ export function createThermalScene(overlay: HTMLElement) {
   let warmed = false;
   function prewarm(): void {
     const renderer = getRenderer();
-    for (let k = 0; k <= 8; k++) matricesFor(k);
+    const solarBlue = (slots[0]!.solarMat as { uniforms?: { uBlue?: { value: unknown } } }).uniforms?.uBlue?.value;
+    if (solarBlue) constellationMaterial.uniforms.uBlue!.value = solarBlue;
     if (!warmed) {
       warmed = true;
       const rt = new WebGLRenderTarget(64, 64);
-      const warmScene = new Scene();
-      const constellation = createConstellationMesh();
-      constellation.visible = true;
-      warmScene.add(constellation);
       const prev = renderer.getRenderTarget();
       renderer.compile(scene, camera);
-      renderer.compile(warmScene, camera);
       void renderer.compileAsync(scene, camera);
-      void renderer.compileAsync(warmScene, camera);
-      for (let k = 0; k <= 8; k++) {
-        const slot = slots[k % 2]!;
-        prepareSlot(slot, k);
-        const src = matricesFor(k);
-        (slot.mesh.instanceMatrix.array as Float32Array).set(src);
-        (slot.solar.instanceMatrix.array as Float32Array).set(src);
+      const wasVisible = field.visible;
+      field.visible = true;
+      for (const slot of slots) {
         slot.mesh.instanceMatrix.needsUpdate = true;
         slot.solar.instanceMatrix.needsUpdate = true;
-        slot.mesh.instanceMatrix.clearUpdateRanges();
-        slot.solar.instanceMatrix.clearUpdateRanges();
-        slot.mesh.count = 4;
-        slot.solar.count = 4;
-        setSlotDither(slot, k % 2 === 0 ? 'in' : 'out', 0.5);
-        for (const ring of ringSlots) {
-          ring.line.visible = true;
-          ring.line.scale.set(1, 1, 1);
-        }
-        renderer.setRenderTarget(rt);
-        renderer.render(scene, camera);
+        slot.mesh.count = 1;
+        slot.solar.count = 1;
+        setSlotDither(slot, 'in', 0.5);
       }
+      for (const ring of ringSlots) {
+        ring.line.visible = true;
+        ring.line.scale.set(1, 1, 1);
+      }
+      setDiscDither('in', 0.5);
       renderer.setRenderTarget(rt);
-      renderer.render(warmScene, camera);
+      renderer.render(scene, camera);
+      setDiscDither('out', 0.5);
+      renderer.render(scene, camera);
       renderer.setRenderTarget(prev);
       for (const slot of slots) {
-        prepareSlot(slot, 0);
-        slot.k = -1;
         slot.mesh.count = 0;
         slot.solar.count = 0;
         setSlotDither(slot, 'off', 1);
@@ -784,25 +918,11 @@ export function createThermalScene(overlay: HTMLElement) {
         ring.line.visible = false;
         ring.radius = -1;
       }
+      setDiscDither('off', 1);
+      field.visible = wasVisible;
       rt.dispose();
-      constellation.geometry.dispose();
       prewarmBloom(renderer, isMobile());
     }
-    let idleK = 0;
-    const step = (deadline?: { timeRemaining: () => number }) => {
-      const budget = Math.min(8, deadline?.timeRemaining() ?? 8);
-      const t0 = performance.now();
-      while (idleK <= 8 && performance.now() - t0 < budget) {
-        matricesFor(idleK);
-        idleK += 1;
-      }
-      if (idleK <= 8) {
-        if (typeof requestIdleCallback === 'function') requestIdleCallback((next) => step(next));
-        else window.setTimeout(() => step(), 32);
-      }
-    };
-    if (typeof requestIdleCallback === 'function') requestIdleCallback((deadline) => step(deadline));
-    else window.setTimeout(() => step(), 32);
   }
 
   return {
@@ -880,34 +1000,27 @@ function makeSlot(): Slot {
   };
 }
 
-export function footprintRadius(area: number): number {
-  const safe = Math.max(area, 1);
-  const k = pickK(safe, -1);
-  const tile = 5 * 10 ** k;
-  const side = Math.sqrt(tile) * 0.92;
-  const c = Math.sqrt((1.25 * tile) / Math.PI);
-  const total = Math.min(MAX, Math.max(1, Math.round(safe / tile)));
-  return c * Math.sqrt(Math.max(total - 1, 0) + 0.5) + side;
+export function satelliteFootprint(aRad: number, aTot: number): {
+  side: number;
+  c: number;
+  tiles: number;
+  nRad: number;
+  rSat: number;
+  rRad: number;
+  spacing: number;
+} {
+  const side = Math.sqrt(TILE) * 0.92;
+  const c = Math.sqrt((1.25 * TILE) / Math.PI);
+  const tiles = Math.max(1, Math.min(TILE_CAP, Math.round(Math.max(aTot, 1) / TILE)));
+  const nRad = Math.min(tiles, Math.max(0, Math.round(Math.max(aRad, 0) / TILE)));
+  const rSat = c * Math.sqrt(Math.max(tiles - 1, 0) + 0.5) + side;
+  const rRad = nRad <= 0 ? 0 : c * Math.sqrt(Math.max(nRad - 1, 0) + 0.5) + side * 0.5;
+  return { side, c, tiles, nRad, rSat, rRad, spacing: 2 * rSat * 1.06 };
 }
 
-function pickK(area: number, current: number): number {
-  const count = (k: number) => area / (5 * 10 ** k);
-  if (current < 0) {
-    let k = 0;
-    while (count(k) > 2000 && k < 8) k += 1;
-    return k;
-  }
-  if (count(current) > 2400) {
-    let k = current;
-    while (count(k) > 2400 && k < 8) k += 1;
-    return k;
-  }
-  if (current > 0 && count(current) < 120) {
-    let k = current;
-    while (k > 0 && count(k) < 120) k -= 1;
-    return k;
-  }
-  return current;
+export function arrayRadius(count: number, unitRad: number, unitTot: number): number {
+  const foot = satelliteFootprint(unitRad, unitTot);
+  return hexOuterRadius(Math.max(count, 1), foot.spacing, foot.rSat);
 }
 
 function smooth(t: number): number {
