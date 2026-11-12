@@ -314,6 +314,7 @@ export function createThermalScene(overlay: HTMLElement) {
     return {
       scene,
       camera,
+      label: 'Thermal',
       get controls() {
         return controls;
       },

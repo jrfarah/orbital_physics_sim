@@ -292,6 +292,7 @@ export function createRadiatorScene(mobile: boolean, tag: HTMLElement) {
       scene,
       camera,
       controls,
+      label: 'Radiator',
       update(dt) {
         void dt;
         if (!focus) return false;

@@ -1,0 +1,65 @@
+{
+  "baseline": {
+    "recordedAt": "2026-11-12T02:18:17.649Z",
+    "desktop": {
+      "viewport": "1440x900",
+      "deviceScaleFactor": 2,
+      "tabs": {
+        "radiator": {
+          "frames": 423,
+          "p50": 16.67,
+          "p95": 16.67,
+          "max": 183.33,
+          "maxAfter1s": 183.33,
+          "source": "chrome-tracing"
+        },
+        "thermal": {
+          "frames": 308,
+          "p50": 16.67,
+          "p95": 16.67,
+          "max": 133.33,
+          "maxAfter1s": 16.67,
+          "source": "chrome-tracing"
+        },
+        "kessler": {
+          "frames": 409,
+          "p50": 16.67,
+          "p95": 16.67,
+          "max": 16.67,
+          "maxAfter1s": 16.67,
+          "source": "chrome-tracing"
+        }
+      }
+    },
+    "mobile": {
+      "device": "Pixel 5",
+      "cpuSlowdown": 4,
+      "tabs": {
+        "radiator": {
+          "frames": 512,
+          "p50": 16.67,
+          "p95": 16.67,
+          "max": 183.33,
+          "maxAfter1s": 183.33,
+          "source": "chrome-tracing"
+        },
+        "thermal": {
+          "frames": 346,
+          "p50": 16.67,
+          "p95": 16.67,
+          "max": 166.66,
+          "maxAfter1s": 16.67,
+          "source": "chrome-tracing"
+        },
+        "kessler": {
+          "frames": 427,
+          "p50": 16.67,
+          "p95": 16.67,
+          "max": 16.67,
+          "maxAfter1s": 16.67,
+          "source": "chrome-tracing"
+        }
+      }
+    }
+  }
+}

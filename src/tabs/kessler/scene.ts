@@ -613,6 +613,7 @@ export function createKesslerScene(tip: HTMLElement) {
       scene: scene as ThreeScene,
       camera,
       controls,
+      label: 'Kessler',
       update(dt) {
         const play = !paused;
         if (!play) return false;

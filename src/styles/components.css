@@ -343,6 +343,22 @@
 .spectrum-toggle { background: none; border: 0; padding: 0; width: 100%; text-align: left; font-size: 13px; }
 .spectrum-tools { display: flex; gap: 8px; align-items: center; margin: 8px 0; }
 .spectrum-tools .btn { width: auto; min-width: 36px; text-align: center; }
+.perf-hud {
+  position: absolute;
+  z-index: 6;
+  top: 52px;
+  left: 12px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(10, 15, 24, 0.92);
+  border: 1px solid var(--panel-border);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre;
+  pointer-events: none;
+}
 .hud-corner {
   position: absolute;
   z-index: 3;

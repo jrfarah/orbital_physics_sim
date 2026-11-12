@@ -5,11 +5,26 @@ export interface TabView {
   scene: Scene;
   camera: PerspectiveCamera;
   controls: OrbitControls;
+  /** Shown in the dev perf HUD. */
+  label?: string;
   update: (dt: number) => boolean;
+  /** In-flight tweens, flashes, and tile pops. Camera damping is counted separately. */
+  animationCount?: () => number;
   resetView: () => void;
   onQualityDrop?: (level: number) => void;
   onResize?: () => void;
   syncDom?: () => void;
+}
+
+export interface PerfSample {
+  dtMs: number;
+  calls: number;
+  triangles: number;
+  textures: number;
+  pixelRatio: number;
+  scene: string;
+  animations: number;
+  rendered: boolean;
 }
 
 const userMoved = new WeakMap<OrbitControls, boolean>();
@@ -28,6 +43,15 @@ let quality = 0;
 let avg = 0;
 let slow = 0;
 const steps = [2, 1.5, 1.25, 1];
+const perfListeners: ((sample: PerfSample) => void)[] = [];
+
+export function subscribePerf(fn: (sample: PerfSample) => void): () => void {
+  perfListeners.push(fn);
+  return () => {
+    const index = perfListeners.indexOf(fn);
+    if (index >= 0) perfListeners.splice(index, 1);
+  };
+}
 
 export function reducedMotion(): boolean {
   return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -109,7 +133,8 @@ function frame(now: number): void {
   const moved = active.controls.update();
   const anim = active.update(dt);
   active.syncDom?.();
-  if (dirty || moved || anim) {
+  const rendered = dirty || moved || anim;
+  if (rendered) {
     renderer.render(active.scene, active.camera);
     dirty = false;
     if (anim) {
@@ -118,7 +143,22 @@ function frame(now: number): void {
       else slow = 0;
       if (slow > 2) dropQuality();
     }
-  } else {
+  }
+  if (perfListeners.length) {
+    const info = renderer.info;
+    const sample: PerfSample = {
+      dtMs: dt * 1000,
+      calls: info.render.calls,
+      triangles: info.render.triangles,
+      textures: info.memory.textures,
+      pixelRatio: ratio,
+      scene: active.label ?? 'scene',
+      animations: active.animationCount?.() ?? (anim ? 1 : 0),
+      rendered,
+    };
+    for (const fn of perfListeners) fn(sample);
+  }
+  if (!rendered) {
     cancelAnimationFrame(raf);
     looping = false;
   }
