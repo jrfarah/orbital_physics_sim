@@ -102,7 +102,7 @@ export function createThermalTab(summary: (text: string) => void) {
     format: (v) => `${fmtTemp(v).main} · ${fmtTemp(v).sub}`,
     onInput: (v) => {
       state.tGpu = v;
-      wrapped();
+      schedule();
     },
   });
   const drop = createSlider({
@@ -115,7 +115,7 @@ export function createThermalTab(summary: (text: string) => void) {
     format: (v) => `${Math.round(v)} K`,
     onInput: (v) => {
       state.dT = v;
-      wrapped();
+      schedule();
     },
   });
   const eps = createSlider({
@@ -128,7 +128,7 @@ export function createThermalTab(summary: (text: string) => void) {
     format: (v) => fmtSig(v, 2),
     onInput: (v) => {
       state.eps = v;
-      wrapped();
+      schedule();
     },
   });
   const env = createSlider({
@@ -141,7 +141,7 @@ export function createThermalTab(summary: (text: string) => void) {
     format: (v) => `${fmtSig(v)} W/m²`,
     onInput: (v) => {
       state.qEnv = v;
-      wrapped();
+      schedule();
     },
   });
   const pv = createSlider({
@@ -154,7 +154,7 @@ export function createThermalTab(summary: (text: string) => void) {
     format: (v) => `${fmtSig(v * 100, 2)}%`,
     onInput: (v) => {
       state.pv = v;
-      wrapped();
+      schedule();
     },
   });
   const pack = createSlider({
@@ -167,7 +167,7 @@ export function createThermalTab(summary: (text: string) => void) {
     format: (v) => fmtSig(v, 2),
     onInput: (v) => {
       state.pack = v;
-      wrapped();
+      schedule();
     },
   });
   const sun = createSlider({
@@ -180,7 +180,7 @@ export function createThermalTab(summary: (text: string) => void) {
     format: (v) => fmtSig(v, 2),
     onInput: (v) => {
       state.sunlit = v;
-      wrapped();
+      schedule();
     },
   });
   const tHot = createSlider({
@@ -193,7 +193,7 @@ export function createThermalTab(summary: (text: string) => void) {
     format: (v) => `${fmtTemp(v).main} · ${fmtTemp(v).sub}`,
     onInput: (v) => {
       state.tHot = v;
-      wrapped();
+      schedule();
     },
   });
   const eta = createSlider({
@@ -206,7 +206,7 @@ export function createThermalTab(summary: (text: string) => void) {
     format: (v) => fmtSig(v, 2),
     onInput: (v) => {
       state.eta = v;
-      wrapped();
+      schedule();
     },
   });
   const pump = createToggle({
@@ -217,7 +217,7 @@ export function createThermalTab(summary: (text: string) => void) {
       state.pump = on;
       tHot.element.hidden = !on;
       eta.element.hidden = !on;
-      wrapped();
+      schedule();
     },
   });
   tHot.element.hidden = true;
@@ -227,6 +227,8 @@ export function createThermalTab(summary: (text: string) => void) {
   function stopPowerAnim(): void {
     if (powerAnim) cancelAnimationFrame(powerAnim);
     powerAnim = 0;
+    if (frame) cancelAnimationFrame(frame);
+    frame = 0;
   }
   const power = createSlider({
     id: 'th-power',
@@ -241,7 +243,7 @@ export function createThermalTab(summary: (text: string) => void) {
       stopPowerAnim();
       state.power = v;
       zoomPower = true;
-      wrapped();
+      schedule();
     },
   });
   function animatePower(target: number): void {
@@ -331,7 +333,7 @@ export function createThermalTab(summary: (text: string) => void) {
     eta.element.hidden = !state.pump;
   }
 
-  function recompute(): void {
+  function recompute(drag = false): void {
     const cold = state.tGpu - state.dT;
     const hot = Math.max(cold + 1, Math.min(600, state.tHot));
     state.tHot = hot;
@@ -340,13 +342,14 @@ export function createThermalTab(summary: (text: string) => void) {
     const input = inputFor(p);
     const result = thermalBudget(input);
     const bare = thermalBudget({ ...input, pump: false, T_hot: null });
-    scene.layout(
+      scene.layout(
       {
         aRad: result.A_rad,
         aTot: result.A_tot,
         tHot: result.T_hot,
       },
       zoomPower,
+      drag,
     );
     zoomPower = false;
     total.set(fmtArea(result.A_tot));
@@ -401,6 +404,27 @@ export function createThermalTab(summary: (text: string) => void) {
     recompute();
     writeUrl();
   };
+  let frame = 0;
+  let powerHeld = false;
+  power.element.addEventListener('pointerdown', () => {
+    powerHeld = true;
+  });
+  function schedule(): void {
+    if (frame) return;
+    frame = requestAnimationFrame(() => {
+      frame = 0;
+      recompute(powerHeld);
+      writeUrl();
+    });
+  }
+  const releasePower = () => {
+    if (!powerHeld) return;
+    powerHeld = false;
+    if (frame) return;
+    schedule();
+  };
+  window.addEventListener('pointerup', releasePower);
+  window.addEventListener('pointercancel', releasePower);
 
   return {
     hud,

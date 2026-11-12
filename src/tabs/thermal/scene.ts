@@ -16,11 +16,12 @@ import {
   Scene,
   Vector3,
 } from 'three';
-import { createEmberMaterial, createSolarMaterial, setHeat, type HeatMaterial } from '../../engine/heatMaterial';
+import { createEmberMaterial, createSolarMaterial, setHeat, setTilePx, type HeatMaterial } from '../../engine/heatMaterial';
 import { LAYER_EMBER } from '../../engine/post';
 import {
   clearUserOrbit,
   createControls,
+  getRenderer,
   makeCamera,
   reducedMotion,
   requestRender,
@@ -56,6 +57,8 @@ interface Slot {
   die: Float64Array;
   mixNow: Float32Array;
   mixTo: Float32Array;
+  hot: number[];
+  hotOn: Uint8Array;
 }
 
 interface Zoom {
@@ -98,6 +101,13 @@ export function createThermalScene(overlay: HTMLElement) {
   let fade: { from: number; to: number; t0: number } | null = null;
   let zoom: Zoom | null = null;
   let userAdjusted = false;
+  let wake = '';
+  let clipDist = -1;
+  let heldK = -1;
+  let heldAt = 0;
+  let queuedK = -1;
+  let lastRad = 0;
+  let lastTot = 1;
 
   const chip = el('div', 'tile-chip', '1 tile = 5 m²');
   const fitBtn = el('button', 'fit-btn', 'Fit') as HTMLButtonElement;
@@ -118,29 +128,29 @@ export function createThermalScene(overlay: HTMLElement) {
     zoom = null;
     userAdjusted = true;
   }
-  function fitClip(): void {
+  function fitClip(force = false): void {
     const distance = camera.position.length();
+    if (!force && clipDist > 0 && Math.abs(distance - clipDist) <= clipDist * 0.01) return;
+    clipDist = distance;
     camera.near = Math.max(distance / 2000, 0.01);
     camera.far = distance * 50 + outer * 4;
     camera.updateProjectionMatrix();
   }
-  function onChange(): void {
-    fitClip();
-  }
   function bindControls(): void {
     controls.addEventListener('start', onStart);
-    controls.addEventListener('change', onChange);
   }
   bindControls();
 
-  function layout(next: ThermalLayout, zoomOut = false): void {
+  function layout(next: ThermalLayout, zoomOut = false, drag = false): void {
     const area = Math.max(next.aTot, 1);
-    const k = pickK(area, slots[shown].k);
-    const slot = ensureLevel(k);
+    lastRad = next.aRad;
+    lastTot = area;
+    const k = pickK(area, slots[shown]!.k);
+    const slot = ensureLevel(k, drag);
     const heat = Math.min(1, Math.max(0, (next.tHot - 1) / 649));
     emberHeat = heat;
-    setHeat(slots[0].mat, heat);
-    setHeat(slots[1].mat, heat);
+    setHeat(slots[0]!.mat, heat);
+    setHeat(slots[1]!.mat, heat);
     fill(slot, next.aRad, area);
     const text = `1 tile = ${Math.round(slot.area).toLocaleString('en-US')} m²`;
     if (chip.textContent !== text) chip.textContent = text;
@@ -156,9 +166,34 @@ export function createThermalScene(overlay: HTMLElement) {
     requestRender();
   }
 
-  function ensureLevel(k: number): Slot {
+  function ensureLevel(k: number, drag: boolean): Slot {
     const front = slots[shown]!;
-    if (front.k === k) return front;
+    if (front.k === k) {
+      queuedK = -1;
+      heldK = -1;
+      return front;
+    }
+    if (drag) {
+      if (heldK !== k) {
+        heldK = k;
+        heldAt = performance.now();
+        return front;
+      }
+      if (performance.now() - heldAt < 150) return front;
+    } else {
+      heldK = -1;
+    }
+    if (fade) {
+      queuedK = k;
+      return front;
+    }
+    queuedK = -1;
+    heldK = -1;
+    return switchTo(k);
+  }
+
+  function switchTo(k: number): Slot {
+    const front = slots[shown]!;
     const next = 1 - shown;
     const back = slots[next]!;
     back.k = k;
@@ -167,9 +202,13 @@ export function createThermalScene(overlay: HTMLElement) {
     back.c = Math.sqrt((1.25 * back.area) / Math.PI);
     back.count = 0;
     back.die.fill(0);
+    back.hot.length = 0;
+    back.hotOn.fill(0);
     if (reducedMotion() || front.count === 0) {
       front.mesh.count = 0;
       front.solar.count = 0;
+      front.hot.length = 0;
+      front.hotOn.fill(0);
       shown = next;
       back.mat.opacity = 1;
       back.solarMat.opacity = 1;
@@ -201,29 +240,57 @@ export function createThermalScene(overlay: HTMLElement) {
     const total = Math.min(MAX, Math.max(1, Math.round(aTot / slot.area)));
     const nRad = Math.min(total, Math.max(0, Math.round(aRad / slot.area)));
     const prev = slot.count;
+    let matLo = MAX;
+    let matHi = -1;
     for (let i = 0; i < total; i++) {
+      const target = i < nRad ? 0 : 1;
       const revived = slot.die[i]! > 0;
       if (i >= prev || revived) {
         slot.born[i] = instant ? now - 2000 : now;
         slot.die[i] = 0;
         place(slot, i);
-        slot.mixNow[i] = i < nRad ? 0 : 1;
+        slot.mixNow[i] = target;
+        slot.mixTo[i] = target;
+        markHot(slot, i);
+        if (i < matLo) matLo = i;
+        if (i > matHi) matHi = i;
+      } else if (slot.mixTo[i] !== target) {
+        slot.mixTo[i] = target;
+        markHot(slot, i);
       }
-      slot.mixTo[i] = i < nRad ? 0 : 1;
     }
     for (let i = total; i < prev; i++) {
-      if (slot.die[i] === 0) slot.die[i] = now;
+      if (slot.die[i] === 0) {
+        slot.die[i] = now;
+        markHot(slot, i);
+      }
+    }
+    if (matHi >= matLo) {
+      const start = matLo * 16;
+      const count = (matHi - matLo + 1) * 16;
+      const emberMatrix = slot.mesh.instanceMatrix;
+      const solarMatrix = slot.solar.instanceMatrix;
+      emberMatrix.clearUpdateRanges();
+      solarMatrix.clearUpdateRanges();
+      emberMatrix.addUpdateRange(start, count);
+      solarMatrix.addUpdateRange(start, count);
+      emberMatrix.needsUpdate = true;
+      solarMatrix.needsUpdate = true;
     }
     let drawn = total;
-    for (let i = total; i < MAX; i++) {
-      if (slot.die[i]! > 0 && now - slot.die[i]! < 280) drawn = i + 1;
+    for (const index of slot.hot) {
+      if (slot.die[index]! > 0) drawn = Math.max(drawn, index + 1);
     }
     slot.count = total;
     slot.mesh.count = drawn;
     slot.solar.count = drawn;
-    slot.mesh.instanceMatrix.needsUpdate = true;
-    slot.solar.instanceMatrix.needsUpdate = true;
     outer = slot.c * Math.sqrt(Math.max(total - 1, 0) + 0.5) + slot.side;
+  }
+
+  function markHot(slot: Slot, index: number): void {
+    if (slot.hotOn[index]) return;
+    slot.hotOn[index] = 1;
+    slot.hot.push(index);
   }
 
   function place(slot: Slot, index: number): void {
@@ -250,37 +317,54 @@ export function createThermalScene(overlay: HTMLElement) {
   }
 
   function tickSlot(slot: Slot, now: number, dt: number): boolean {
-    if (slot.mesh.count === 0) return false;
+    if (slot.hot.length === 0) return false;
     let live = false;
-    let drawn = 0;
     const mixStep = Math.min(1, dt / 0.3);
-    for (let i = 0; i < slot.mesh.count; i++) {
+    const instant = reducedMotion();
+    let lo = MAX;
+    let hi = -1;
+    const hot = slot.hot;
+    for (let n = 0; n < hot.length; ) {
+      const i = hot[n]!;
       const size = pop(slot, i, now);
       slot.scale.setX(i, size);
       slot.solarScale.setX(i, size);
       const target = slot.mixTo[i] ?? 1;
       const current = slot.mixNow[i] ?? target;
-      if (Math.abs(current - target) > 0.004) {
-        slot.mixNow[i] = current + (target - current) * mixStep;
+      if (Math.abs(current - target) > 0.004) slot.mixNow[i] = current + (target - current) * mixStep;
+      const mix = slot.mixNow[i] ?? target;
+      slot.mix.setX(i, mix);
+      slot.solarMix.setX(i, mix);
+      if (i < lo) lo = i;
+      if (i > hi) hi = i;
+      const popping = slot.die[i]! > 0
+        ? !instant && now - slot.die[i]! < 280
+        : !instant && now < slot.born[i]! + Math.min(i * 3, 400) + 250;
+      const mixing = Math.abs(mix - target) > 0.004;
+      if (popping || mixing) {
         live = true;
-      }
-      slot.mix.setX(i, slot.mixNow[i] ?? target);
-      slot.solarMix.setX(i, slot.mixNow[i] ?? target);
-      if (size > 0.001) drawn = i + 1;
-      if (slot.die[i]! > 0) {
-        if (now - slot.die[i]! < 280) live = true;
-      } else if (now < slot.born[i]! + Math.min(i * 3, 400) + 250) {
-        live = true;
+        n += 1;
+      } else {
+        slot.hotOn[i] = 0;
+        hot[n] = hot[hot.length - 1]!;
+        hot.pop();
       }
     }
-    slot.scale.needsUpdate = true;
-    slot.solarScale.needsUpdate = true;
-    slot.mix.needsUpdate = true;
-    slot.solarMix.needsUpdate = true;
-    if (drawn < slot.mesh.count) {
-      const next = Math.max(drawn, slot.count);
-      slot.mesh.count = next;
-      slot.solar.count = next;
+    if (hi >= lo) {
+      const count = hi - lo + 1;
+      for (const attr of [slot.scale, slot.solarScale, slot.mix, slot.solarMix]) {
+        attr.clearUpdateRanges();
+        attr.addUpdateRange(lo, count);
+        attr.needsUpdate = true;
+      }
+    }
+    let drawn = slot.count;
+    for (const index of slot.hot) {
+      if (slot.die[index]! > 0 && now - slot.die[index]! < 280) drawn = Math.max(drawn, index + 1);
+    }
+    if (drawn !== slot.mesh.count) {
+      slot.mesh.count = drawn;
+      slot.solar.count = drawn;
     }
     return live;
   }
@@ -307,7 +391,7 @@ export function createThermalScene(overlay: HTMLElement) {
     camera.position.multiplyScalar(dist / length);
     camera.lookAt(controls.target);
     controls.update();
-    fitClip();
+    fitClip(true);
   }
 
   function considerZoom(): void {
@@ -347,9 +431,12 @@ export function createThermalScene(overlay: HTMLElement) {
         return controls;
       },
       update(dt) {
+        fitClip(false);
         setEmberGlare(emberHeat > 0.02 ? 0.35 + 1.4 * emberHeat : 0);
         const now = performance.now();
+        const reasons: string[] = [];
         let live = tickSlot(slots[shown]!, now, dt);
+        if (live) reasons.push('tile-tween');
         if (fade) {
           const other = slots[fade.from]!;
           live = tickSlot(other, now, dt) || live;
@@ -364,14 +451,25 @@ export function createThermalScene(overlay: HTMLElement) {
           if (t >= 1) {
             other.mesh.count = 0;
             other.solar.count = 0;
+            other.hot.length = 0;
+            other.hotOn.fill(0);
             other.mat.opacity = 1;
             other.solarMat.opacity = 1;
             const front = slots[fade.to]!;
             front.mat.opacity = 1;
             front.solarMat.opacity = 1;
             fade = null;
+            if (queuedK >= 0 && queuedK !== front.k) {
+              const nextK = queuedK;
+              queuedK = -1;
+              const slot = switchTo(nextK);
+              fill(slot, lastRad, lastTot);
+              const text = `1 tile = ${Math.round(slot.area).toLocaleString('en-US')} m²`;
+              if (chip.textContent !== text) chip.textContent = text;
+            }
           }
           live = true;
+          reasons.push('cross-fade');
         }
         if (zoom) {
           const t = Math.min(1, (now - zoom.t0) / 500);
@@ -379,8 +477,14 @@ export function createThermalScene(overlay: HTMLElement) {
           applyDistance(zoom.from + (zoom.to - zoom.from) * e);
           if (t >= 1) zoom = null;
           live = true;
+          reasons.push('auto-zoom');
         }
+        wake = reasons.join('+');
+        publishTilePx();
         return live;
+      },
+      activity() {
+        return wake;
       },
       resetView() {
         clearUserOrbit(controls);
@@ -412,6 +516,14 @@ export function createThermalScene(overlay: HTMLElement) {
         leaderLine.setAttribute('y2', String(p.y - 14));
       },
     };
+  }
+
+  function publishTilePx(): void {
+    const dist = Math.max(camera.position.length(), 1e-3);
+    const closest = Math.max(dist - outer, dist * 0.2);
+    const fov = (camera.fov * Math.PI) / 180;
+    const px = ((overlay.clientHeight / 2) / Math.tan(fov / 2)) * getRenderer().getPixelRatio();
+    for (const slot of slots) setTilePx(slot.solarMat, (slot.side / closest) * px);
   }
 
   function project(x: number, y: number, z: number): { x: number; y: number; ok: boolean } {
@@ -464,6 +576,10 @@ function makeSlot(): Slot {
   solar.frustumCulled = false;
   mesh.instanceMatrix.setUsage(DynamicDrawUsage);
   solar.instanceMatrix.setUsage(DynamicDrawUsage);
+  scale.setUsage(DynamicDrawUsage);
+  mix.setUsage(DynamicDrawUsage);
+  solarScale.setUsage(DynamicDrawUsage);
+  solarMix.setUsage(DynamicDrawUsage);
   mesh.renderOrder = 2;
   solar.renderOrder = 3;
   return {
@@ -484,6 +600,8 @@ function makeSlot(): Slot {
     die: new Float64Array(MAX),
     mixNow: new Float32Array(MAX),
     mixTo: new Float32Array(MAX).fill(1),
+    hot: [],
+    hotOn: new Uint8Array(MAX),
   };
 }
 

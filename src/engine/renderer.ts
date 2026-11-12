@@ -1,4 +1,4 @@
-import { ACESFilmicToneMapping, PerspectiveCamera, Scene, SRGBColorSpace, WebGLRenderer } from 'three';
+import { ACESFilmicToneMapping, InstancedMesh, PerspectiveCamera, Scene, SRGBColorSpace, WebGLRenderer } from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { renderComposited } from './post';
 
@@ -11,6 +11,8 @@ export interface TabView {
   update: (dt: number) => boolean;
   /** In-flight tweens, flashes, and tile pops. Camera damping is counted separately. */
   animationCount?: () => number;
+  /** Why update() last returned true. Empty when the view is at rest. */
+  activity?: () => string;
   /** Kessler keeps the adaptive ratio. It never snaps to a full-DPR still. */
   continuous?: boolean;
   resetView: () => void;
@@ -24,10 +26,18 @@ export interface PerfSample {
   calls: number;
   triangles: number;
   textures: number;
+  geometries: number;
+  programs: number;
+  meshes: number;
+  instances: number;
+  heap: number;
   pixelRatio: number;
   scene: string;
   animations: number;
   rendered: boolean;
+  looping: boolean;
+  reason: string;
+  renderedFrames: number;
 }
 
 const userMoved = new WeakMap<OrbitControls, boolean>();
@@ -58,6 +68,8 @@ let calm = 0;
 let costCount = 0;
 let costPos = 0;
 let emberGlare = 0;
+let renderedFrames = 0;
+let wakeReason = 'idle';
 const costs = new Float64Array(10);
 const passStats = { calls: 0, triangles: 0 };
 const perfListeners: ((sample: PerfSample) => void)[] = [];
@@ -234,7 +246,20 @@ function frame(now: number): void {
     snap = true;
   }
   const rendered = dirty || moved || anim || snap;
+  const activity = anim ? active.activity?.() || 'animation' : '';
+  wakeReason = rendered
+    ? [
+        pointerDown ? 'pointer' : '',
+        dirty ? 'requested' : '',
+        moved ? 'camera' : '',
+        activity,
+        snap ? 'pixel-ratio' : '',
+      ]
+        .filter(Boolean)
+        .join('+') || 'render'
+    : 'idle';
   if (rendered) {
+    renderedFrames += 1;
     const t0 = performance.now();
     if (emberGlare > 0.02) {
       const stats = renderComposited(renderer, active.scene, active.camera, { glare: emberGlare, mobile: isMobile() });
@@ -253,15 +278,31 @@ function frame(now: number): void {
   active.syncDom?.();
   if (perfListeners.length) {
     const info = renderer.info;
+    let meshes = 0;
+    let instances = 0;
+    active.scene.traverse((obj) => {
+      if (!(obj instanceof InstancedMesh)) return;
+      meshes += 1;
+      instances += obj.count;
+    });
+    const heap = (performance as Performance & { memory?: { usedJSHeapSize: number } }).memory?.usedJSHeapSize ?? 0;
     const sample: PerfSample = {
       dtMs: dt * 1000,
       calls: passStats.calls,
       triangles: passStats.triangles,
       textures: info.memory.textures,
+      geometries: info.memory.geometries,
+      programs: info.programs?.length ?? 0,
+      meshes,
+      instances,
+      heap,
       pixelRatio: ratio,
       scene: active.label ?? 'scene',
       animations: active.animationCount?.() ?? (anim ? 1 : 0),
       rendered,
+      looping: rendered,
+      reason: wakeReason,
+      renderedFrames,
     };
     for (const fn of perfListeners) fn(sample);
   }

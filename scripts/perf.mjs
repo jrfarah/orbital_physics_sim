@@ -15,22 +15,32 @@ const preview = spawn('npx', ['vite', 'preview', '--host', '127.0.0.1', '--port'
   stdio: ['ignore', 'pipe', 'pipe'],
 });
 const browser = await chromium.launch({ channel: 'chrome' });
-const report = { desktop: {}, mobile: {} };
+const sweepOnly = process.argv.includes('--sweep');
+const report = { desktop: {}, mobile: {}, thermalSweep: null };
 try {
   await waitFor(`http://127.0.0.1:${port}/`);
-  report.desktop = await profile(browser, `http://127.0.0.1:${port}`, {
-    viewport: { width: 1440, height: 900 },
-    deviceScaleFactor: 2,
-  });
-  report.mobile = await profile(browser, `http://127.0.0.1:${port}`, {
-    ...devices['Pixel 5'],
-    throttle: 4,
-  });
+  if (sweepOnly) {
+    report.thermalSweep = await thermalSweep(browser, `http://127.0.0.1:${port}`);
+  } else {
+    report.desktop = await profile(browser, `http://127.0.0.1:${port}`, {
+      viewport: { width: 1440, height: 900 },
+      deviceScaleFactor: 2,
+    });
+    report.thermalSweep = await thermalSweep(browser, `http://127.0.0.1:${port}`);
+    report.mobile = await profile(browser, `http://127.0.0.1:${port}`, {
+      ...devices['Pixel 5'],
+      throttle: 4,
+    });
+  }
 } finally {
   await browser.close();
   preview.kill('SIGTERM');
 }
 
+if (sweepOnly) {
+  console.log(JSON.stringify(report.thermalSweep, null, 2));
+  process.exit(0);
+}
 await mkdir(new URL('../perf/', import.meta.url), { recursive: true });
 let existing = {};
 try {
@@ -41,10 +51,61 @@ try {
 existing[phase] = {
   recordedAt: new Date().toISOString(),
   desktop: { viewport: '1440x900', deviceScaleFactor: 2, tabs: report.desktop },
+  thermalSweep: report.thermalSweep,
   mobile: { device: 'Pixel 5', cpuSlowdown: 4, tabs: report.mobile },
 };
 await writeFile(outPath, `${JSON.stringify(existing, null, 2)}\n`);
 console.log(JSON.stringify(existing[phase], null, 2));
+
+async function thermalSweep(browser, origin) {
+  const options = { viewport: { width: 1440, height: 900 }, deviceScaleFactor: 2 };
+  const context = await browser.newContext({ viewport: options.viewport, deviceScaleFactor: 2 });
+  const page = await context.newPage();
+  await lockViewport(context, page, options);
+  await page.goto(`${origin}/#/thermal?perf=1`, { waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('#canvas-host canvas');
+  await page.waitForTimeout(1000);
+  await revealControls(page);
+  const read = () => page.evaluate(() => window.__perf ?? null);
+  const start = await read();
+  let afterFirst = null;
+  const sweeps = await trace(page, context, async () => {
+    for (let i = 0; i < 10; i++) {
+      await dragSlider(page, '#th-power [role="slider"]', 0, 1, 1500);
+      await dragSlider(page, '#th-power [role="slider"]', 1, 0, 1500);
+      if (i === 0) afterFirst = await read();
+    }
+  });
+  const afterTen = await read();
+  await dragSlider(page, '#th-power [role="slider"]', 0, 1, 1500);
+  await page.waitForTimeout(1200);
+  const restStart = await read();
+  await page.waitForTimeout(5000);
+  const restEnd = await read();
+  const radiator = await trace(page, context, async () => {
+    await page.goto(`${origin}/#/radiator?perf=1`, { waitUntil: 'domcontentloaded' });
+    await lockViewport(context, page, options);
+    await page.waitForSelector('#canvas-host canvas');
+    await page.waitForTimeout(800);
+    await revealControls(page);
+    await dragSlider(page, '#tilt [role="slider"]', 0.15, 0.85, 1200);
+    await dragSlider(page, '#tilt [role="slider"]', 0.85, 0.15, 1200);
+    await orbit(page, 2200);
+  });
+  const radiatorCounters = await read();
+  await context.close();
+  return {
+    start,
+    afterFirstSweep: afterFirst,
+    afterTenSweeps: afterTen,
+    sweeps,
+    restFrames: (restEnd?.renderedFrames ?? 0) - (restStart?.renderedFrames ?? 0),
+    restStart,
+    restEnd,
+    radiator,
+    radiatorCounters,
+  };
+}
 
 async function profile(browser, origin, options) {
   const context = await browser.newContext({

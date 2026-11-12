@@ -15,6 +15,9 @@ interface Shape {
   area: number;
   lines: number[][];
   faint: number[][];
+  box: { w: number; h: number; cx: number; cy: number };
+  dLines: string;
+  dFaint: string;
 }
 
 function arc(cx: number, cz: number, r: number, a0: number, a1: number, steps: number): number[] {
@@ -115,6 +118,9 @@ function pentagon(): Shape {
     area: Math.abs(area) / 2,
     lines: [outer],
     faint: [ring(0.37)],
+    box: { w: 0, h: 0, cx: 0, cy: 0 },
+    dLines: '',
+    dFaint: '',
   };
 }
 
@@ -132,7 +138,37 @@ function catalog(): Shape[] {
     { id: 'field', label: 'Football field', area: 5351, lines: fieldLines(), faint: [] },
     pentagon(),
     ...geo,
-  ];
+  ].map(prepare);
+}
+
+function localPath(lines: number[][], cx: number, cy: number): string {
+  return lines
+    .map((line) => {
+      let d = '';
+      for (let i = 0; i < line.length; i += 2) {
+        const x = line[i]! - cx;
+        const y = -(line[i + 1]! - cy);
+        d += `${i === 0 ? 'M' : 'L'}${x.toFixed(2)} ${y.toFixed(2)}`;
+      }
+      return d;
+    })
+    .join(' ');
+}
+
+function prepare(shape: {
+  id: string;
+  label: string;
+  area: number;
+  lines: number[][];
+  faint: number[][];
+}): Shape {
+  const box = bounds([...shape.lines, ...shape.faint]);
+  return {
+    ...shape,
+    box,
+    dLines: localPath(shape.lines, box.cx, box.cy),
+    dFaint: localPath(shape.faint, box.cx, box.cy),
+  };
 }
 
 function fmtArea(m2: number): string {
@@ -143,34 +179,88 @@ function fmtArea(m2: number): string {
   return `${m2.toLocaleString('en-US', { maximumFractionDigits: m2 >= 100 ? 0 : 1 })} m²`;
 }
 
-function pathData(lines: number[][], scale: number, cx: number, cy: number, ox: number, oy: number): string {
-  return lines
-    .map((line) => {
-      let d = '';
-      for (let i = 0; i < line.length; i += 2) {
-        const x = ox + (line[i]! - cx) * scale;
-        const y = oy - (line[i + 1]! - cy) * scale;
-        d += `${i === 0 ? 'M' : 'L'}${x.toFixed(2)} ${y.toFixed(2)}`;
-      }
-      return d;
-    })
-    .join(' ');
+const NS = 'http://www.w3.org/2000/svg';
+
+function svgEl<T extends SVGElement>(name: string): T {
+  return document.createElementNS(NS, name) as T;
+}
+
+function stylePath(path: SVGPathElement, color: string, width: number): void {
+  path.setAttribute('fill', 'none');
+  path.setAttribute('stroke', color);
+  path.setAttribute('stroke-width', String(width));
+  path.setAttribute('stroke-linejoin', 'round');
+  path.setAttribute('stroke-linecap', 'round');
+  path.setAttribute('vector-effect', 'non-scaling-stroke');
 }
 
 export function mountScaleInset(overlay: HTMLElement): { setArea: (m2: number) => void } {
   const refs = catalog();
   const card = document.createElement('div');
   card.className = 'scale-inset';
-  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  const svg = svgEl<SVGSVGElement>('svg');
   svg.setAttribute('aria-hidden', 'true');
+  const clip = svgEl<SVGClipPathElement>('clipPath');
+  clip.id = 'inset-clip';
+  const clipRect = svgEl<SVGRectElement>('rect');
+  clipRect.setAttribute('x', '0');
+  clipRect.setAttribute('y', '0');
+  clip.append(clipRect);
+  const defs = svgEl<SVGDefsElement>('defs');
+  defs.append(clip);
+  const title = svgEl<SVGTextElement>('text');
+  title.setAttribute('x', '10');
+  title.setAttribute('y', '13');
+  title.setAttribute('fill', 'var(--text-dim)');
+  title.setAttribute('font-size', '11');
+  title.setAttribute('font-family', 'Inter, system-ui, sans-serif');
+  title.textContent = 'To scale';
+  const group = svgEl<SVGGElement>('g');
+  group.setAttribute('clip-path', 'url(#inset-clip)');
+  const circle = svgEl<SVGCircleElement>('circle');
+  circle.setAttribute('fill', 'rgba(92,225,255,0.25)');
+  circle.setAttribute('stroke', '#5ce1ff');
+  circle.setAttribute('stroke-width', '1');
+  const fromG = svgEl<SVGGElement>('g');
+  const toG = svgEl<SVGGElement>('g');
+  const fromFaint = svgEl<SVGPathElement>('path');
+  const fromMain = svgEl<SVGPathElement>('path');
+  const toFaint = svgEl<SVGPathElement>('path');
+  const toMain = svgEl<SVGPathElement>('path');
+  stylePath(fromFaint, 'var(--text-dim)', 1);
+  stylePath(fromMain, 'var(--text)', 1.25);
+  stylePath(toFaint, 'var(--text-dim)', 1);
+  stylePath(toMain, 'var(--text)', 1.25);
+  fromG.append(fromFaint, fromMain);
+  toG.append(toFaint, toMain);
+  group.append(circle, fromG, toG);
+  const arrayLabel = svgEl<SVGTextElement>('text');
+  const refLabel = svgEl<SVGTextElement>('text');
+  for (const label of [arrayLabel, refLabel]) {
+    label.setAttribute('text-anchor', 'middle');
+    label.setAttribute('font-size', '10');
+    label.setAttribute('font-family', 'Inter, system-ui, sans-serif');
+    label.setAttribute('lengthAdjust', 'spacingAndGlyphs');
+  }
+  arrayLabel.setAttribute('fill', 'var(--text)');
+  refLabel.setAttribute('fill', 'var(--text-dim)');
+  svg.append(defs, title, group, arrayLabel, refLabel);
   card.append(svg);
   overlay.append(card);
 
+  const lengths = new Map<string, number>();
   let shown: Shape | null = null;
   let pending: Shape | null = null;
   let pendingAt = 0;
   let area = 1;
   let fading: { from: Shape; to: Shape; t0: number } | null = null;
+  let raf = 0;
+  let lastScale = -1;
+  let lastId = '';
+  let lastFade = false;
+  let lastMobile: boolean | null = null;
+  let lastArrayText = '';
+  let lastRefText = '';
 
   const closest = (m2: number): Shape => {
     if (m2 >= 1e6 && m2 <= 10e6) {
@@ -190,20 +280,50 @@ export function mountScaleInset(overlay: HTMLElement): { setArea: (m2: number) =
     return best;
   };
 
+  const paintPath = (path: SVGPathElement, d: string, opacity: number, reveal: number, key: string) => {
+    if (!d) {
+      path.setAttribute('display', 'none');
+      return;
+    }
+    path.setAttribute('display', '');
+    if (path.getAttribute('d') !== d) path.setAttribute('d', d);
+    path.setAttribute('opacity', (opacity).toFixed(3));
+    let len = lengths.get(key);
+    if (len === undefined) {
+      len = path.getTotalLength() || 1;
+      lengths.set(key, len);
+    }
+    path.setAttribute('stroke-dasharray', String(len));
+    path.setAttribute('stroke-dashoffset', ((1 - reveal) * len).toFixed(1));
+  };
+
   const draw = () => {
     const mobile = window.matchMedia('(max-width: 899px)').matches;
     const w = mobile ? 180 : 240;
     const h = mobile ? 130 : 170;
-    svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
-    svg.setAttribute('width', String(w));
-    svg.setAttribute('height', String(h));
+    const sizeChanged = mobile !== lastMobile;
+    if (sizeChanged) {
+      lastMobile = mobile;
+      svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
+      svg.setAttribute('width', String(w));
+      svg.setAttribute('height', String(h));
+      clipRect.setAttribute('width', String(w));
+      clipRect.setAttribute('height', String(h));
+      const labelW = Math.floor(w * 0.46);
+      arrayLabel.setAttribute('x', (w * 0.26).toFixed(1));
+      refLabel.setAttribute('x', (w * 0.74).toFixed(1));
+      arrayLabel.setAttribute('y', String(h - 6));
+      refLabel.setAttribute('y', String(h - 6));
+      arrayLabel.setAttribute('textLength', String(labelW));
+      refLabel.setAttribute('textLength', String(labelW));
+    }
     const now = performance.now();
     const fade = fading ? Math.min(1, (now - fading.t0) / 400) : 1;
     const current = fading?.to ?? shown ?? refs[0]!;
-    const previous = fading?.from;
+    const previous = fading && fade < 1 ? fading.from : null;
     const r = Math.sqrt(Math.max(area, 1e-9) / Math.PI);
     const arrayBox = { w: r * 2, h: r * 2 };
-    const refBox = bounds([...current.lines, ...current.faint]);
+    const refBox = current.box;
     const pad = 8;
     const content = { x: pad, y: 18, w: w - pad * 2, h: h - 18 - 16 };
     const gap = 8;
@@ -225,43 +345,60 @@ export function mountScaleInset(overlay: HTMLElement): { setArea: (m2: number) =
     const refAt = row
       ? { x: x0 + aw + gap + rw / 2, y: y0 + totalH / 2 }
       : { x: x0 + totalW / 2, y: y0 + ah + gap + rh / 2 };
-    const parts: string[] = [];
-    parts.push(`<defs><clipPath id="inset-clip"><rect x="0" y="0" width="${w}" height="${h}"/></clipPath></defs>`);
-    parts.push(`<text x="10" y="13" fill="var(--text-dim)" font-size="11" font-family="Inter, system-ui, sans-serif">To scale</text>`);
-    parts.push(`<g clip-path="url(#inset-clip)">`);
-    parts.push(
-      `<circle cx="${arrayAt.x.toFixed(2)}" cy="${arrayAt.y.toFixed(2)}" r="${(r * scale).toFixed(2)}" fill="rgba(92,225,255,0.25)" stroke="#5ce1ff" stroke-width="1"/>`,
-    );
-    const stroke = (shape: Shape, opacity: number, dash: number) => {
-      const box = bounds([...shape.lines, ...shape.faint]);
-      const len = 4000;
-      const offset = (1 - dash) * len;
-      const path = (lines: number[][], color: string, width: number, extra: number) => {
-        const d = pathData(lines, scale, box.cx, box.cy, refAt.x, refAt.y);
-        return `<path d="${d}" fill="none" stroke="${color}" stroke-width="${width}" stroke-linejoin="round" stroke-linecap="round" opacity="${(opacity * extra).toFixed(3)}" stroke-dasharray="${len}" stroke-dashoffset="${offset.toFixed(1)}"/>`;
-      };
-      return `${shape.faint.length ? path(shape.faint, 'var(--text-dim)', 1, 0.4) : ''}${path(shape.lines, 'var(--text)', 1.25, 1)}`;
-    };
-    if (previous && fade < 1) parts.push(stroke(previous, 1 - fade, 1));
-    parts.push(stroke(current, fading ? fade : 1, fading ? fade : 1));
-    parts.push(`</g>`);
-    const labelW = Math.floor(w * 0.46);
-    parts.push(
-      `<text x="${(w * 0.26).toFixed(1)}" y="${h - 6}" text-anchor="middle" fill="var(--text)" font-size="10" font-family="Inter, system-ui, sans-serif" textLength="${labelW}" lengthAdjust="spacingAndGlyphs">This array · ${fmtArea(area)}</text>`,
-    );
-    parts.push(
-      `<text x="${(w * 0.74).toFixed(1)}" y="${h - 6}" text-anchor="middle" fill="var(--text-dim)" font-size="10" font-family="Inter, system-ui, sans-serif" textLength="${labelW}" lengthAdjust="spacingAndGlyphs">${current.label} · ${fmtArea(current.area)}</text>`,
-    );
-    svg.innerHTML = parts.join('');
-    card.dataset.insetLabel = `${current.label} · ${fmtArea(current.area)}`;
+    const arrayText = `This array · ${fmtArea(area)}`;
+    const refText = `${current.label} · ${fmtArea(current.area)}`;
+    if (arrayText !== lastArrayText) {
+      arrayLabel.textContent = arrayText;
+      lastArrayText = arrayText;
+    }
+    if (refText !== lastRefText) {
+      refLabel.textContent = refText;
+      lastRefText = refText;
+    }
+    card.dataset.insetLabel = refText;
+    const fadingNow = previous !== null;
+    const scaleClose = lastScale > 0 && Math.abs(scale - lastScale) / lastScale < 0.005;
+    if (current.id === lastId && scaleClose && !fadingNow && !lastFade && !sizeChanged) {
+      if (fading && fade < 1) requestAnimationFrame(draw);
+      else fading = null;
+      return;
+    }
+    lastScale = scale;
+    lastId = current.id;
+    lastFade = fadingNow;
+    circle.setAttribute('cx', arrayAt.x.toFixed(2));
+    circle.setAttribute('cy', arrayAt.y.toFixed(2));
+    circle.setAttribute('r', (r * scale).toFixed(2));
+    const transform = `translate(${refAt.x.toFixed(2)} ${refAt.y.toFixed(2)}) scale(${scale.toFixed(6)})`;
+    toG.setAttribute('transform', transform);
+    const reveal = fading ? fade : 1;
+    const show = fading ? fade : 1;
+    paintPath(toFaint, current.dFaint, show * 0.4, reveal, `${current.id}:faint`);
+    paintPath(toMain, current.dLines, show, reveal, `${current.id}:lines`);
+    if (previous) {
+      fromG.setAttribute('display', '');
+      fromG.setAttribute('transform', transform);
+      paintPath(fromFaint, previous.dFaint, (1 - fade) * 0.4, 1, `${previous.id}:faint`);
+      paintPath(fromMain, previous.dLines, 1 - fade, 1, `${previous.id}:lines`);
+    } else {
+      fromG.setAttribute('display', 'none');
+    }
     if (fading && fade < 1) requestAnimationFrame(draw);
     else fading = null;
+  };
+
+  const schedule = () => {
+    if (raf) return;
+    raf = requestAnimationFrame(() => {
+      raf = 0;
+      draw();
+    });
   };
 
   const commit = (next: Shape) => {
     if (shown && shown.id !== next.id) fading = { from: shown, to: next, t0: performance.now() };
     shown = next;
-    draw();
+    schedule();
   };
 
   return {
@@ -270,11 +407,11 @@ export function mountScaleInset(overlay: HTMLElement): { setArea: (m2: number) =
       const next = closest(m2);
       if (!shown) {
         shown = next;
-        draw();
+        schedule();
         return;
       }
       if (next.id === shown.id && !pending) {
-        draw();
+        schedule();
         return;
       }
       if (!pending || pending.id !== next.id) {
@@ -290,7 +427,7 @@ export function mountScaleInset(overlay: HTMLElement): { setArea: (m2: number) =
         const chosen = pending;
         pending = null;
         if (chosen.id !== shown?.id) commit(chosen);
-        else draw();
+        else schedule();
       };
       window.setTimeout(wait, 300);
     },

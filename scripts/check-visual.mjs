@@ -12,15 +12,17 @@ const baseArg = process.argv.find((arg) => arg.startsWith('--base='));
 const goldenDir = new URL('../shots/golden/', import.meta.url);
 
 const views = [
-  { name: 'thermal-120kw', url: '#/thermal', allow: true },
-  { name: 'thermal-120kw-roundtrip', url: '#/thermal', roundtrip: true, goldenName: 'thermal-120kw', allow: true },
-  { name: 'thermal-1mw', url: '#/thermal?P=1000000', allow: true },
-  { name: 'thermal-1gw', url: '#/thermal?P=1000000000', allow: true },
-  { name: 'thermal-1tw', url: '#/thermal?P=1000000000000', allow: true },
-  { name: 'kessler-filed', url: '#/kessler?rate=1e9&area=800&preset=spacex', pause: true, limb: true },
-  { name: 'kessler-1tw', url: '#/kessler?rate=1e12', pause: true, limb: true },
-  { name: 'kessler-spread', url: '#/kessler?preset=spread', pause: true, limb: true },
-  { name: 'radiator-best-overview', url: '#/radiator', radiator: true, limb: true },
+  { name: 'thermal-120kw', url: '#/thermal' },
+  { name: 'thermal-120kw-roundtrip', url: '#/thermal', roundtrip: true, goldenName: 'thermal-120kw' },
+  { name: 'thermal-1mw', url: '#/thermal?P=1000000' },
+  { name: 'thermal-1gw', url: '#/thermal?P=1000000000' },
+  { name: 'thermal-10gw', url: '#/thermal?P=10000000000' },
+  { name: 'thermal-100gw', url: '#/thermal?P=100000000000' },
+  { name: 'thermal-1tw', url: '#/thermal?P=1000000000000' },
+  { name: 'kessler-filed', url: '#/kessler?rate=1e9&area=800&preset=spacex', pause: true },
+  { name: 'kessler-1tw', url: '#/kessler?rate=1e12', pause: true },
+  { name: 'kessler-spread', url: '#/kessler?preset=spread', pause: true },
+  { name: 'radiator-best-overview', url: '#/radiator', radiator: true },
 ];
 
 const port = await freePort();
@@ -98,9 +100,9 @@ try {
       await page.close();
       continue;
     }
-    const diff = await compare(golden, png, [...masks, ...goldenMasks], box, view.limb);
-    const limit = view.limb ? 0.01 : 0.03;
-    const line = `${view.name}: ${(diff.ratio * 100).toFixed(2)}%${view.limb ? ' outside the limb band' : ''} masks ${masks.length}+${goldenMasks.length} (${diff.mismatch}/${diff.total})`;
+    const diff = await compare(golden, png, [...masks, ...goldenMasks], box, false);
+    const limit = 0.03;
+    const line = `${view.name}: ${(diff.ratio * 100).toFixed(2)}% masks ${masks.length}+${goldenMasks.length} (${diff.mismatch}/${diff.total})`;
     console.log(line);
     if (diff.ratio > limit) {
       await mkdir(new URL('../shots/visual-fail/', import.meta.url), { recursive: true });
@@ -111,12 +113,7 @@ try {
         );
       }
     }
-    if (diff.ratio > limit) {
-      if (view.allow) notes.push(line);
-      else failures.push(line);
-    } else if (view.allow) {
-      notes.push(line);
-    }
+    if (diff.ratio > limit) failures.push(line);
     await page.close();
   }
 } finally {

@@ -1,6 +1,7 @@
 import {
   DataTexture,
   LinearFilter,
+  Material,
   MeshStandardMaterial,
   NoColorSpace,
   RGBAFormat,
@@ -168,6 +169,7 @@ void main() {
 
 const SOLAR_FRAG = /* glsl */ `
 uniform float uOpacity;
+uniform float uTilePx;
 uniform vec3 uLightDir;
 varying float vMix;
 varying vec2 vUv;
@@ -188,60 +190,6 @@ void main() {
   vec3 c0 = srgb(vec3(10.0, 23.0, 54.0) / 255.0);
   vec3 c1 = srgb(vec3(17.0, 41.0, 90.0) / 255.0);
   vec3 silver = srgb(vec3(163.0, 174.0, 189.0) / 255.0);
-
-  vec2 uv = vUv;
-  vec2 fw = fwidth(uv);
-  float texel = max(fw.x, fw.y);
-  float tilePx = 1.0 / max(texel, 1e-5);
-  float cellPx = tilePx * (0.94 / 8.0);
-
-  vec2 tileEdge = min(uv, 1.0 - uv);
-  float frameDist = min(tileEdge.x, tileEdge.y);
-  float frameAa = min(texel, 0.008);
-  float frameCov = 1.0 - smoothstep(0.03 - frameAa, 0.03 + frameAa, frameDist);
-  frameCov *= smoothstep(1.0, 2.5, 0.03 * tilePx);
-  vec3 frameCol = mix(alumEdge, alum, clamp(frameDist / 0.03, 0.0, 1.0));
-
-  vec2 p = (uv - 0.03) / 0.94;
-  vec2 cellUv = p * 8.0;
-  vec2 cellId = floor(cellUv);
-  vec2 f = fract(cellUv);
-  vec2 fwCell = fwidth(cellUv);
-  float gapDist = min(min(f.x, 1.0 - f.x), min(f.y, 1.0 - f.y));
-  float gapAa = min(max(fwCell.x, fwCell.y), 0.008);
-  float gapN = max(0.02, min(0.10, 1.15 / max(cellPx, 1.0)));
-  float gapCov = 1.0 - smoothstep(gapN - gapAa, gapN + gapAa, gapDist);
-  float corner = min(
-    min(f.x + f.y, (1.0 - f.x) + f.y),
-    min(f.x + (1.0 - f.y), (1.0 - f.x) + (1.0 - f.y))
-  );
-  float cutAa = min(max(fwCell.x, fwCell.y), 0.03);
-  float cutCov = 1.0 - smoothstep(0.12 - cutAa, 0.12 + cutAa, corner);
-  float inside = step(0.0, p.x) * step(p.x, 1.0) * step(0.0, p.y) * step(p.y, 1.0);
-  float gapVis = smoothstep(8.0, 14.0, cellPx);
-  float cutVis = smoothstep(10.0, 18.0, cellPx);
-  float sheet = max(gapCov * gapVis, cutCov * cutVis) * inside * (1.0 - frameCov);
-
-  float hash = fract(sin(dot(cellId + 1.0, vec2(127.1, 311.7))) * 43758.5453);
-  vec3 cell = mix(c0, c1, hash) * mix(0.92, 1.05, f.y);
-
-  float fingerFade = smoothstep(8.0, 16.0, cellPx) * smoothstep(0.6, 1.4, cellPx * 0.008);
-  float busFade = smoothstep(3.0, 7.0, cellPx) * smoothstep(0.7, 1.6, cellPx * 0.015);
-  float fy = abs(fract(f.y * 10.0) - 0.5);
-  float fingerAa = min(fwidth(f.y * 10.0), 0.02);
-  float finger = 1.0 - smoothstep(0.04, 0.04 + fingerAa, fy);
-  float busAa = min(fwCell.x, 0.004);
-  float bus = 0.0;
-  bus = max(bus, 1.0 - smoothstep(0.0075, 0.0075 + busAa, abs(f.x - 0.25)));
-  bus = max(bus, 1.0 - smoothstep(0.0075, 0.0075 + busAa, abs(f.x - 0.50)));
-  bus = max(bus, 1.0 - smoothstep(0.0075, 0.0075 + busAa, abs(f.x - 0.75)));
-  float line = inside * (1.0 - frameCov) * (1.0 - sheet);
-  cell = mix(cell, silver, finger * 0.06 * fingerFade * line);
-  cell = mix(cell, silver, bus * busFade * line);
-
-  vec3 col = mix(cell, back, sheet);
-  col = mix(col, frameCol, frameCov);
-
   // Area weights: cell body 0.796, backsheet 0.088, frame 0.116.
   // Mixed in sRGB so the bright frame does not erase the cell color.
   vec3 average = srgb((
@@ -249,8 +197,80 @@ void main() {
     vec3(201.0, 211.0, 223.0) * 0.088 +
     vec3(138.0, 150.0, 166.0) * 0.116
   ) / 255.0);
-  float detail = smoothstep(2.0, 4.0, cellPx);
-  col = mix(average, col, detail);
+
+  // uTilePx is an upper bound on one tile in device pixels, including the near edge of the array.
+  // A fade that is already zero at that size is zero everywhere in the draw.
+  float lodCell = uTilePx * (0.94 / 8.0);
+  vec3 col = average;
+  if (!(uTilePx > 0.0 && lodCell <= 2.0)) {
+    vec2 uv = vUv;
+    vec2 fw = fwidth(uv);
+    float texel = max(fw.x, fw.y);
+    float tilePx = 1.0 / max(texel, 1e-5);
+    float cellPx = tilePx * (0.94 / 8.0);
+
+    float frameCov = 0.0;
+    vec3 frameCol = alum;
+    if (uTilePx <= 0.0 || lodCell > 3.9) {
+      vec2 tileEdge = min(uv, 1.0 - uv);
+      float frameDist = min(tileEdge.x, tileEdge.y);
+      float frameAa = min(texel, 0.008);
+      frameCov = 1.0 - smoothstep(0.03 - frameAa, 0.03 + frameAa, frameDist);
+      frameCov *= smoothstep(1.0, 2.5, 0.03 * tilePx);
+      frameCol = mix(alumEdge, alum, clamp(frameDist / 0.03, 0.0, 1.0));
+    }
+
+    vec2 p = (uv - 0.03) / 0.94;
+    vec2 cellUv = p * 8.0;
+    vec2 cellId = floor(cellUv);
+    vec2 f = fract(cellUv);
+    float inside = step(0.0, p.x) * step(p.x, 1.0) * step(0.0, p.y) * step(p.y, 1.0);
+    float sheet = 0.0;
+    if (uTilePx <= 0.0 || lodCell > 8.0) {
+      vec2 fwCell = fwidth(cellUv);
+      float gapDist = min(min(f.x, 1.0 - f.x), min(f.y, 1.0 - f.y));
+      float gapAa = min(max(fwCell.x, fwCell.y), 0.008);
+      float gapN = max(0.02, min(0.10, 1.15 / max(cellPx, 1.0)));
+      float gapCov = 1.0 - smoothstep(gapN - gapAa, gapN + gapAa, gapDist);
+      float corner = min(
+        min(f.x + f.y, (1.0 - f.x) + f.y),
+        min(f.x + (1.0 - f.y), (1.0 - f.x) + (1.0 - f.y))
+      );
+      float cutAa = min(max(fwCell.x, fwCell.y), 0.03);
+      float cutCov = 1.0 - smoothstep(0.12 - cutAa, 0.12 + cutAa, corner);
+      float gapVis = smoothstep(8.0, 14.0, cellPx);
+      float cutVis = smoothstep(10.0, 18.0, cellPx);
+      sheet = max(gapCov * gapVis, cutCov * cutVis) * inside * (1.0 - frameCov);
+    }
+
+    float hash = fract(sin(dot(cellId + 1.0, vec2(127.1, 311.7))) * 43758.5453);
+    vec3 cell = mix(c0, c1, hash) * mix(0.92, 1.05, f.y);
+
+    float finger = 0.0;
+    float bus = 0.0;
+    if (uTilePx <= 0.0 || lodCell > 75.0) {
+      float fy = abs(fract(f.y * 10.0) - 0.5);
+      float fingerAa = min(fwidth(f.y * 10.0), 0.02);
+      finger = 1.0 - smoothstep(0.04, 0.04 + fingerAa, fy);
+    }
+    if (uTilePx <= 0.0 || lodCell > 46.6) {
+      vec2 fwCell = fwidth(cellUv);
+      float busAa = min(fwCell.x, 0.004);
+      bus = max(bus, 1.0 - smoothstep(0.0075, 0.0075 + busAa, abs(f.x - 0.25)));
+      bus = max(bus, 1.0 - smoothstep(0.0075, 0.0075 + busAa, abs(f.x - 0.50)));
+      bus = max(bus, 1.0 - smoothstep(0.0075, 0.0075 + busAa, abs(f.x - 0.75)));
+    }
+    float fingerFade = smoothstep(8.0, 16.0, cellPx) * smoothstep(0.6, 1.4, cellPx * 0.008);
+    float busFade = smoothstep(3.0, 7.0, cellPx) * smoothstep(0.7, 1.6, cellPx * 0.015);
+    float line = inside * (1.0 - frameCov) * (1.0 - sheet);
+    cell = mix(cell, silver, finger * 0.06 * fingerFade * line);
+    cell = mix(cell, silver, bus * busFade * line);
+
+    col = mix(cell, back, sheet);
+    col = mix(col, frameCol, frameCov);
+    float detail = smoothstep(2.0, 4.0, cellPx);
+    col = mix(average, col, detail);
+  }
 
   vec3 N = normalize(vNormalW);
   vec3 L = normalize(uLightDir);
@@ -275,6 +295,7 @@ export function createSolarMaterial(): ShaderMaterial {
   const mat = new ShaderMaterial({
     uniforms: {
       uOpacity,
+      uTilePx: { value: 0 },
       uLightDir: { value: new Vector3(0.4, 1, 0.7).normalize() },
     },
     vertexShader: SOLAR_VERT,
@@ -286,6 +307,12 @@ export function createSolarMaterial(): ShaderMaterial {
     uOpacity.value = mat.opacity;
   };
   return mat;
+}
+
+/** On-screen tile size in device pixels. Zero keeps the full solar shader. */
+export function setTilePx(material: Material, px: number): void {
+  const uniforms = (material as ShaderMaterial).uniforms as { uTilePx?: { value: number } } | undefined;
+  if (uniforms?.uTilePx) uniforms.uTilePx.value = px;
 }
 
 export function createEmberMaterial(
