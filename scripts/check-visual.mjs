@@ -13,6 +13,7 @@ const goldenDir = new URL('../shots/golden/', import.meta.url);
 
 const views = [
   { name: 'thermal-120kw', url: '#/thermal' },
+  { name: 'thermal-120kw-roundtrip', url: '#/thermal', roundtrip: true, goldenName: 'thermal-120kw' },
   { name: 'thermal-1mw', url: '#/thermal?P=1000000' },
   { name: 'thermal-1gw', url: '#/thermal?P=1000000000' },
   { name: 'thermal-1tw', url: '#/thermal?P=1000000000000' },
@@ -60,6 +61,12 @@ try {
       await page.getByRole('button', { name: 'Overview' }).click();
       await page.waitForTimeout(700);
     }
+    if (view.roundtrip) {
+      await page.getByRole('button', { name: '1 TW', exact: true }).click();
+      await page.waitForTimeout(900);
+      await page.getByRole('button', { name: '120 kW', exact: true }).click();
+      await page.waitForTimeout(900);
+    }
     const canvas = page.locator('#canvas-host canvas');
     const box = await canvas.boundingBox();
     const png = await canvas.screenshot();
@@ -69,12 +76,15 @@ try {
       masks.push({ x: 0, y: 0, w: 380, h: 240 });
       masks.push({ x: box.width - 200, y: 0, w: 200, h: 64 });
     }
-    const file = new URL(`${view.name}.png`, goldenDir);
-    const maskFile = new URL(`${view.name}.json`, goldenDir);
+    const goldenKey = view.goldenName ?? view.name;
+    const file = new URL(`${goldenKey}.png`, goldenDir);
+    const maskFile = new URL(`${goldenKey}.json`, goldenDir);
     if (capture) {
-      await writeFile(file, png);
-      await writeFile(maskFile, JSON.stringify(masks));
-      console.log(`captured ${view.name} ${png.length} bytes`);
+      if (!view.roundtrip) {
+        await writeFile(file, png);
+        await writeFile(maskFile, JSON.stringify(masks));
+        console.log(`captured ${view.name} ${png.length} bytes`);
+      }
       await page.close();
       continue;
     }

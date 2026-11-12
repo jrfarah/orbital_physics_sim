@@ -111,8 +111,18 @@ export function createThermalScene(overlay: HTMLElement) {
     zoom = null;
     userAdjusted = true;
   }
+  function fitClip(): void {
+    const distance = camera.position.length();
+    camera.near = Math.max(distance / 2000, 0.01);
+    camera.far = distance * 50 + outer * 4;
+    camera.updateProjectionMatrix();
+  }
+  function onChange(): void {
+    fitClip();
+  }
   function bindControls(): void {
     controls.addEventListener('start', onStart);
+    controls.addEventListener('change', onChange);
   }
   bindControls();
 
@@ -267,11 +277,9 @@ export function createThermalScene(overlay: HTMLElement) {
   function applyDistance(dist: number): void {
     const length = Math.max(camera.position.length(), 1e-3);
     camera.position.multiplyScalar(dist / length);
-    camera.near = Math.max(0.02, dist / 2000);
-    camera.far = Math.max(dist * 40, 1000);
-    camera.updateProjectionMatrix();
     camera.lookAt(controls.target);
     controls.update();
+    fitClip();
   }
 
   function considerZoom(): void {
