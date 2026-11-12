@@ -7,12 +7,22 @@ import { bigNumber, card, el } from '../../ui/readout';
 import { createButtonRow, createCollapsible, createMoreDetail, createSlider, createToggle } from '../../ui/controls';
 import { reducedMotion, setActiveView } from '../../engine/renderer';
 import { createThermalCharts } from './charts';
-import { createThermalScene } from './scene';
+import { createThermalScene, footprintRadius } from './scene';
 
 const SNAPS = [
   { label: '120 kW', watts: 120e3 },
   { label: '1 MW', watts: 1e6 },
   { label: '1 GW', watts: 1e9 },
+  { label: '1 TW', watts: 1e12 },
+];
+const MILESTONES = [
+  { label: '120 kW', watts: 120e3 },
+  { label: '1 MW', watts: 1e6 },
+  { label: '10 MW', watts: 10e6 },
+  { label: '100 MW', watts: 100e6 },
+  { label: '1 GW', watts: 1e9 },
+  { label: '10 GW', watts: 10e9 },
+  { label: '100 GW', watts: 100e9 },
   { label: '1 TW', watts: 1e12 },
 ];
 const FOOT_NAME: Record<string, string> = {
@@ -223,7 +233,7 @@ export function createThermalTab(summary: (text: string) => void) {
   tHot.element.hidden = true;
   eta.element.hidden = true;
   let powerAnim = 0;
-  let zoomPower = false;
+  let follow: 'fit' | 'track' | 'out' | 'auto' = 'auto';
   function stopPowerAnim(): void {
     if (powerAnim) cancelAnimationFrame(powerAnim);
     powerAnim = 0;
@@ -242,29 +252,38 @@ export function createThermalTab(summary: (text: string) => void) {
     onInput: (v) => {
       stopPowerAnim();
       state.power = v;
-      zoomPower = true;
+      follow = 'out';
       schedule();
     },
   });
   function animatePower(target: number): void {
     stopPowerAnim();
-    if (reducedMotion()) {
+    const from = state.power;
+    if (reducedMotion() || !(from > 0) || from === target) {
       state.power = target;
       power.setValue(target, true);
-      zoomPower = true;
+      follow = 'fit';
       wrapped();
+      scene.finishInset();
       return;
     }
-    const from = state.power;
+    const decades = Math.abs(Math.log10(target / from));
+    const duration = Math.min(3, Math.max(0.8, 0.6 * decades)) * 1000;
     const t0 = performance.now();
     const step = () => {
-      const t = Math.min(1, (performance.now() - t0) / 600);
-      state.power = t >= 1 ? target : Math.exp(Math.log(from) + (Math.log(target) - Math.log(from)) * t);
+      const raw = Math.min(1, (performance.now() - t0) / duration);
+      const eased = raw * raw * (3 - 2 * raw);
+      state.power = raw >= 1 ? target : Math.exp(Math.log(from) + (Math.log(target) - Math.log(from)) * eased);
       power.setValue(state.power, true);
-      zoomPower = true;
-      recompute();
+      follow = 'track';
+      recompute(false);
       writeUrl();
-      powerAnim = t < 1 ? requestAnimationFrame(step) : 0;
+      if (raw >= 1) {
+        scene.finishInset();
+        powerAnim = 0;
+      } else {
+        powerAnim = requestAnimationFrame(step);
+      }
     };
     powerAnim = requestAnimationFrame(step);
   }
@@ -338,20 +357,28 @@ export function createThermalTab(summary: (text: string) => void) {
     const hot = Math.max(cold + 1, Math.min(600, state.tHot));
     state.tHot = hot;
     tHot.setRange(Math.min(599, cold + 1), 600, hot);
+    const mode = follow;
+    follow = 'auto';
     const p = state.power;
     const input = inputFor(p);
     const result = thermalBudget(input);
     const bare = thermalBudget({ ...input, pump: false, T_hot: null });
-      scene.layout(
+    scene.layout(
       {
         aRad: result.A_rad,
         aTot: result.A_tot,
         tHot: result.T_hot,
       },
-      zoomPower,
       drag,
+      mode,
     );
-    zoomPower = false;
+    const below = MILESTONES.filter((mark) => mark.watts < p * 0.999);
+    scene.setRings(
+      below.slice(-3).reverse().map((mark) => ({
+        label: mark.label,
+        radius: footprintRadius(thermalBudget({ ...input, P: mark.watts }).A_tot),
+      })),
+    );
     total.set(fmtArea(result.A_tot));
     radStat.textContent = fmtArea(result.A_rad);
     solStat.textContent = fmtArea(result.A_sol);
@@ -408,6 +435,7 @@ export function createThermalTab(summary: (text: string) => void) {
   let powerHeld = false;
   power.element.addEventListener('pointerdown', () => {
     powerHeld = true;
+    stopPowerAnim();
   });
   function schedule(): void {
     if (frame) return;
@@ -420,22 +448,28 @@ export function createThermalTab(summary: (text: string) => void) {
   const releasePower = () => {
     if (!powerHeld) return;
     powerHeld = false;
+    follow = 'out';
     if (frame) return;
     schedule();
   };
   window.addEventListener('pointerup', releasePower);
   window.addEventListener('pointercancel', releasePower);
+  const stage = () => document.getElementById('canvas-host');
+  const onStageDown = () => stopPowerAnim();
 
   return {
     hud,
     controls,
     show() {
       document.getElementById('stage')?.append(overlay, caption);
+      stage()?.addEventListener('pointerdown', onStageDown);
       scene.rebind();
       setActiveView(scene.view());
+      follow = 'fit';
       wrapped();
     },
     hide() {
+      stage()?.removeEventListener('pointerdown', onStageDown);
       overlay.remove();
       caption.remove();
       scene.detach();

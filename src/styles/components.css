@@ -327,6 +327,41 @@
   padding: 4px 10px;
 }
 .tile-chip { left: 12px; }
+.tile-chip.flash { color: #5ce1ff; border-color: #5ce1ff; }
+.scale-bar {
+  position: absolute;
+  left: 12px;
+  bottom: 36px;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  pointer-events: none;
+  color: var(--text);
+  font-size: 11px;
+  line-height: 14px;
+}
+.scale-bar i {
+  display: block;
+  height: 8px;
+  border-bottom: 2px solid #5ce1ff;
+  border-left: 1px solid #5ce1ff;
+  border-right: 1px solid #5ce1ff;
+}
+.ring-layer { position: absolute; inset: 0; z-index: 3; overflow: hidden; pointer-events: none; }
+.ring-tag { width: 0; height: 0; overflow: visible; pointer-events: none; }
+.ring-tag span {
+  position: absolute;
+  left: 6px;
+  top: 0;
+  transform: translateY(-50%);
+  font-size: 11px;
+  line-height: 14px;
+  color: #5ce1ff;
+  white-space: nowrap;
+}
+.ring-tag i { display: none; position: absolute; left: -2px; top: -2px; width: 4px; height: 4px; border-radius: 50%; background: #5ce1ff; }
+.ring-tag.dot i { display: block; }
 .fit-btn { right: 12px; pointer-events: auto; cursor: pointer; }
 .leader { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
 .leader line { stroke: var(--line); stroke-width: 1; }
@@ -346,6 +381,7 @@
 }
 @media (max-width: 899px) {
   .stage-caption { left: 12px; right: 12px; bottom: 150px; }
+  .scale-bar { bottom: 174px; }
 }
 .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 8px; }
 .delta { display: inline-block; margin-top: 8px; padding: 4px 8px; border-radius: 999px; font-size: 13px; }

@@ -3,8 +3,10 @@ import {
   LinearFilter,
   Material,
   MeshStandardMaterial,
+  NearestFilter,
   NoColorSpace,
   RGBAFormat,
+  RepeatWrapping,
   ShaderMaterial,
   SRGBColorSpace,
   UnsignedByteType,
@@ -170,6 +172,9 @@ void main() {
 const SOLAR_FRAG = /* glsl */ `
 uniform float uOpacity;
 uniform float uTilePx;
+uniform sampler2D uBlue;
+uniform float uDitherGate;
+uniform float uDitherMode;
 uniform vec3 uLightDir;
 varying float vMix;
 varying vec2 vUv;
@@ -183,6 +188,11 @@ vec3 srgb(vec3 c) {
 void main() {
   float alpha = uOpacity * vMix;
   if (alpha < 0.01) discard;
+  if (uDitherMode > -0.5) {
+    float bn = texture2D(uBlue, gl_FragCoord.xy / 64.0).r;
+    if (uDitherMode > 0.5) { if (bn > uDitherGate) discard; }
+    else if (bn <= uDitherGate) discard;
+  }
 
   vec3 alum = srgb(vec3(138.0, 150.0, 166.0) / 255.0);
   vec3 alumEdge = srgb(vec3(176.0, 186.0, 198.0) / 255.0);
@@ -292,10 +302,15 @@ void main() {
 /** Procedural monocrystalline panel. No textures. */
 export function createSolarMaterial(): ShaderMaterial {
   const uOpacity = { value: 1 };
+  const ditherGate = { value: 1 };
+  const ditherMode = { value: -1 };
   const mat = new ShaderMaterial({
     uniforms: {
       uOpacity,
       uTilePx: { value: 0 },
+      uBlue: { value: getBlueNoise() },
+      uDitherGate: ditherGate,
+      uDitherMode: ditherMode,
       uLightDir: { value: new Vector3(0.4, 1, 0.7).normalize() },
     },
     vertexShader: SOLAR_VERT,
@@ -306,7 +321,74 @@ export function createSolarMaterial(): ShaderMaterial {
   mat.onBeforeRender = () => {
     uOpacity.value = mat.opacity;
   };
+  bindDither(mat, ditherGate, ditherMode);
   return mat;
+}
+
+const ditherOf = new WeakMap<Material, { gate: { value: number }; mode: { value: number } }>();
+
+function bindDither(material: Material, gate: { value: number }, mode: { value: number }): void {
+  ditherOf.set(material, { gate, mode });
+}
+
+/** Screen-door fade. `in` keeps noise below the gate, `out` keeps noise above it. */
+export function setDither(material: Material, mode: 'in' | 'out' | 'off', gate: number): void {
+  const dither = ditherOf.get(material);
+  if (!dither) return;
+  dither.gate.value = gate;
+  dither.mode.value = mode === 'in' ? 1 : mode === 'out' ? 0 : -1;
+}
+
+let blueNoise: DataTexture | null = null;
+
+function getBlueNoise(): DataTexture {
+  if (blueNoise) return blueNoise;
+  const size = 64;
+  const n = size * size;
+  const energy = new Float32Array(n);
+  const placed = new Uint8Array(n);
+  const order = new Uint16Array(n);
+  const radius = 6;
+  const sigma2 = 1.9 * 1.9;
+  for (let rank = 0; rank < n; rank++) {
+    let best = 0;
+    let bestE = Infinity;
+    for (let i = 0; i < n; i++) {
+      if (placed[i]) continue;
+      const e = energy[i]!;
+      if (e < bestE) {
+        bestE = e;
+        best = i;
+      }
+    }
+    placed[best] = 1;
+    order[best] = rank;
+    const bx = best % size;
+    const by = (best / size) | 0;
+    for (let y = -radius; y <= radius; y++) {
+      const py = (by + y + size) % size;
+      for (let x = -radius; x <= radius; x++) {
+        const px = (bx + x + size) % size;
+        energy[py * size + px]! += Math.exp(-(x * x + y * y) / (2 * sigma2));
+      }
+    }
+  }
+  const data = new Uint8Array(n * 4);
+  for (let i = 0; i < n; i++) {
+    const v = Math.round((order[i]! / (n - 1)) * 255);
+    data[i * 4] = v;
+    data[i * 4 + 1] = v;
+    data[i * 4 + 2] = v;
+    data[i * 4 + 3] = 255;
+  }
+  blueNoise = new DataTexture(data, size, size, RGBAFormat);
+  blueNoise.wrapS = RepeatWrapping;
+  blueNoise.wrapT = RepeatWrapping;
+  blueNoise.magFilter = NearestFilter;
+  blueNoise.minFilter = NearestFilter;
+  blueNoise.colorSpace = NoColorSpace;
+  blueNoise.needsUpdate = true;
+  return blueNoise;
 }
 
 /** On-screen tile size in device pixels. Zero keeps the full solar shader. */
@@ -342,11 +424,14 @@ export function createEmberMaterial(
   const side = { value: 1 };
   mat.userData.time = time;
   mat.userData.side = side;
-  mat.customProgramCacheKey = () => (instanced ? 'ember-instanced-v1' : 'heat-face-v6');
+  mat.customProgramCacheKey = () => (instanced ? 'ember-instanced-v2' : 'heat-face-v6');
   if (instanced) {
     mat.transparent = true;
     mat.depthWrite = false;
   }
+  const ditherGate = { value: 1 };
+  const ditherMode = { value: -1 };
+  if (instanced) bindDither(mat, ditherGate, ditherMode);
   mat.onBeforeCompile = (shader: WebGLProgramParametersWithUniforms) => {
     shader.uniforms.uHeat = heat;
     shader.uniforms.uNoise = { value: getEmberNoise() };
@@ -356,6 +441,11 @@ export function createEmberMaterial(
     shader.uniforms.uBloomOnly = bloomOnly;
     shader.uniforms.uTime = time;
     shader.uniforms.uSide = side;
+    if (instanced) {
+      shader.uniforms.uBlue = { value: getBlueNoise() };
+      shader.uniforms.uDitherGate = ditherGate;
+      shader.uniforms.uDitherMode = ditherMode;
+    }
     shader.vertexShader = shader.vertexShader
       .replace(
         '#include <common>',
@@ -386,6 +476,7 @@ uniform vec2 uNoiseOffset;
 uniform float uNoiseRotation;
 uniform float uNoiseScale;
 uniform float uBloomOnly;
+${instanced ? 'uniform sampler2D uBlue;\nuniform float uDitherGate;\nuniform float uDitherMode;' : ''}
 vec3 emberOut;
 ${instanced ? 'varying float vMix;\nvarying float vSeed;' : ''}
 ${HEAT_GLSL}`,
@@ -439,7 +530,17 @@ totalEmissiveRadiance += emberOut;`,
         '#include <dithering_fragment>',
         `#include <dithering_fragment>
 if (uBloomOnly > 0.5) gl_FragColor = vec4(emberOut, 1.0);
-${instanced ? 'else gl_FragColor.a *= 1.0 - vMix;' : ''}`,
+${instanced ? 'else gl_FragColor.a *= 1.0 - vMix;' : ''}
+${
+  instanced
+    ? `if (gl_FragColor.a < 0.01) discard;
+if (uDitherMode > -0.5) {
+  float bn = texture2D(uBlue, gl_FragCoord.xy / 64.0).r;
+  if (uDitherMode > 0.5) { if (bn > uDitherGate) discard; }
+  else if (bn <= uDitherGate) discard;
+}`
+    : ''
+}`,
       );
   };
   return mat;

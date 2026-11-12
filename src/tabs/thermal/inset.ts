@@ -1,4 +1,5 @@
 import raw from '../../assets/outlines.json';
+import { reducedMotion } from '../../engine/renderer';
 
 interface Packed {
   id: string;
@@ -16,8 +17,7 @@ interface Shape {
   lines: number[][];
   faint: number[][];
   box: { w: number; h: number; cx: number; cy: number };
-  dLines: string;
-  dFaint: string;
+  ordered: { d: string; faint: boolean }[];
 }
 
 function arc(cx: number, cz: number, r: number, a0: number, a1: number, steps: number): number[] {
@@ -119,8 +119,7 @@ function pentagon(): Shape {
     lines: [outer],
     faint: [ring(0.37)],
     box: { w: 0, h: 0, cx: 0, cy: 0 },
-    dLines: '',
-    dFaint: '',
+    ordered: [],
   };
 }
 
@@ -141,18 +140,14 @@ function catalog(): Shape[] {
   ].map(prepare);
 }
 
-function localPath(lines: number[][], cx: number, cy: number): string {
-  return lines
-    .map((line) => {
-      let d = '';
-      for (let i = 0; i < line.length; i += 2) {
-        const x = line[i]! - cx;
-        const y = -(line[i + 1]! - cy);
-        d += `${i === 0 ? 'M' : 'L'}${x.toFixed(2)} ${y.toFixed(2)}`;
-      }
-      return d;
-    })
-    .join(' ');
+function localLine(line: number[], cx: number, cy: number): string {
+  let d = '';
+  for (let i = 0; i < line.length; i += 2) {
+    const x = line[i]! - cx;
+    const y = -(line[i + 1]! - cy);
+    d += `${i === 0 ? 'M' : 'L'}${x.toFixed(2)} ${y.toFixed(2)}`;
+  }
+  return d;
 }
 
 function prepare(shape: {
@@ -163,11 +158,12 @@ function prepare(shape: {
   faint: number[][];
 }): Shape {
   const box = bounds([...shape.lines, ...shape.faint]);
+  const main = shape.lines.map((line) => ({ d: localLine(line, box.cx, box.cy), faint: false }));
+  const dim = shape.faint.map((line) => ({ d: localLine(line, box.cx, box.cy), faint: true }));
   return {
     ...shape,
     box,
-    dLines: localPath(shape.lines, box.cx, box.cy),
-    dFaint: localPath(shape.faint, box.cx, box.cy),
+    ordered: shape.id === 'centralPark' ? [...dim, ...main] : [...main, ...dim],
   };
 }
 
@@ -194,7 +190,7 @@ function stylePath(path: SVGPathElement, color: string, width: number): void {
   path.setAttribute('vector-effect', 'non-scaling-stroke');
 }
 
-export function mountScaleInset(overlay: HTMLElement): { setArea: (m2: number) => void } {
+export function mountScaleInset(overlay: HTMLElement): { setArea: (m2: number) => void; commit: () => void } {
   const refs = catalog();
   const card = document.createElement('div');
   card.className = 'scale-inset';
@@ -223,16 +219,6 @@ export function mountScaleInset(overlay: HTMLElement): { setArea: (m2: number) =
   circle.setAttribute('stroke-width', '1');
   const fromG = svgEl<SVGGElement>('g');
   const toG = svgEl<SVGGElement>('g');
-  const fromFaint = svgEl<SVGPathElement>('path');
-  const fromMain = svgEl<SVGPathElement>('path');
-  const toFaint = svgEl<SVGPathElement>('path');
-  const toMain = svgEl<SVGPathElement>('path');
-  stylePath(fromFaint, 'var(--text-dim)', 1);
-  stylePath(fromMain, 'var(--text)', 1.25);
-  stylePath(toFaint, 'var(--text-dim)', 1);
-  stylePath(toMain, 'var(--text)', 1.25);
-  fromG.append(fromFaint, fromMain);
-  toG.append(toFaint, toMain);
   group.append(circle, fromG, toG);
   const arrayLabel = svgEl<SVGTextElement>('text');
   const refLabel = svgEl<SVGTextElement>('text');
@@ -255,9 +241,9 @@ export function mountScaleInset(overlay: HTMLElement): { setArea: (m2: number) =
   let area = 1;
   let fading: { from: Shape; to: Shape; t0: number } | null = null;
   let raf = 0;
-  let lastScale = -1;
-  let lastId = '';
-  let lastFade = false;
+  let shownScale = -1;
+  let shownR = -1;
+  let drawnId = '';
   let lastMobile: boolean | null = null;
   let lastArrayText = '';
   let lastRefText = '';
@@ -280,21 +266,40 @@ export function mountScaleInset(overlay: HTMLElement): { setArea: (m2: number) =
     return best;
   };
 
-  const paintPath = (path: SVGPathElement, d: string, opacity: number, reveal: number, key: string) => {
-    if (!d) {
-      path.setAttribute('display', 'none');
-      return;
-    }
-    path.setAttribute('display', '');
-    if (path.getAttribute('d') !== d) path.setAttribute('d', d);
-    path.setAttribute('opacity', (opacity).toFixed(3));
-    let len = lengths.get(key);
-    if (len === undefined) {
-      len = path.getTotalLength() || 1;
-      lengths.set(key, len);
-    }
-    path.setAttribute('stroke-dasharray', String(len));
-    path.setAttribute('stroke-dashoffset', ((1 - reveal) * len).toFixed(1));
+  const mountPaths = (group: SVGGElement, shape: Shape, animate: boolean) => {
+    group.replaceChildren();
+    shape.ordered.forEach((item, index) => {
+      if (!item.d) return;
+      const path = svgEl<SVGPathElement>('path');
+      stylePath(path, item.faint ? 'var(--text-dim)' : 'var(--text)', item.faint ? 1 : 1.25);
+      path.setAttribute('d', item.d);
+      path.setAttribute('opacity', '1');
+      group.append(path);
+      const key = `${shape.id}:${index}`;
+      let len = lengths.get(key);
+      if (len === undefined) {
+        len = path.getTotalLength() || 1;
+        lengths.set(key, len);
+      }
+      if (!animate || reducedMotion()) return;
+      path.style.strokeDasharray = String(len);
+      path.style.strokeDashoffset = String(len);
+      const delay = index * 40;
+      const clear = () => {
+        path.style.strokeDasharray = '';
+        path.style.strokeDashoffset = '';
+        path.style.transition = '';
+        path.removeAttribute('stroke-dasharray');
+      };
+      path.addEventListener('transitionend', (event) => {
+        if (event.propertyName === 'stroke-dashoffset') clear();
+      });
+      window.setTimeout(clear, 700 + delay + 50);
+      path.style.transition = `stroke-dashoffset 700ms linear ${delay}ms`;
+      requestAnimationFrame(() => {
+        path.style.strokeDashoffset = '0';
+      });
+    });
   };
 
   const draw = () => {
@@ -318,23 +323,31 @@ export function mountScaleInset(overlay: HTMLElement): { setArea: (m2: number) =
       refLabel.setAttribute('textLength', String(labelW));
     }
     const now = performance.now();
-    const fade = fading ? Math.min(1, (now - fading.t0) / 400) : 1;
+    const fade = fading ? Math.min(1, (now - fading.t0) / 300) : 1;
     const current = fading?.to ?? shown ?? refs[0]!;
     const previous = fading && fade < 1 ? fading.from : null;
     const r = Math.sqrt(Math.max(area, 1e-9) / Math.PI);
-    const arrayBox = { w: r * 2, h: r * 2 };
     const refBox = current.box;
     const pad = 8;
     const content = { x: pad, y: 18, w: w - pad * 2, h: h - 18 - 16 };
     const gap = 8;
-    const side = Math.min((content.w - gap) / (arrayBox.w + refBox.w), content.h / Math.max(arrayBox.h, refBox.h));
-    const stacked = Math.min(content.w / Math.max(arrayBox.w, refBox.w), (content.h - gap) / (arrayBox.h + refBox.h));
+    const targetBox = { w: r * 2, h: r * 2 };
+    const side = Math.min((content.w - gap) / (targetBox.w + refBox.w), content.h / Math.max(targetBox.h, refBox.h));
+    const stacked = Math.min(content.w / Math.max(targetBox.w, refBox.w), (content.h - gap) / (targetBox.h + refBox.h));
     const scale = Math.max(side, stacked);
-    const row = side >= stacked;
-    const aw = arrayBox.w * scale;
-    const ah = arrayBox.h * scale;
-    const rw = refBox.w * scale;
-    const rh = refBox.h * scale;
+    if (shownScale < 0) shownScale = scale;
+    else shownScale += (scale - shownScale) * 0.35;
+    if (shownR < 0) shownR = r;
+    else shownR += (r - shownR) * 0.35;
+    const arrayBox = { w: shownR * 2, h: shownR * 2 };
+    const sideNow = Math.min((content.w - gap) / (arrayBox.w + refBox.w), content.h / Math.max(arrayBox.h, refBox.h));
+    const stackedNow = Math.min(content.w / Math.max(arrayBox.w, refBox.w), (content.h - gap) / (arrayBox.h + refBox.h));
+    const drawScale = Math.max(sideNow, stackedNow);
+    const row = sideNow >= stackedNow;
+    const aw = arrayBox.w * drawScale;
+    const ah = arrayBox.h * drawScale;
+    const rw = refBox.w * drawScale;
+    const rh = refBox.h * drawScale;
     const totalW = row ? aw + gap + rw : Math.max(aw, rw);
     const totalH = row ? Math.max(ah, rh) : ah + gap + rh;
     const x0 = content.x + (content.w - totalW) / 2;
@@ -356,35 +369,38 @@ export function mountScaleInset(overlay: HTMLElement): { setArea: (m2: number) =
       lastRefText = refText;
     }
     card.dataset.insetLabel = refText;
-    const fadingNow = previous !== null;
-    const scaleClose = lastScale > 0 && Math.abs(scale - lastScale) / lastScale < 0.005;
-    if (current.id === lastId && scaleClose && !fadingNow && !lastFade && !sizeChanged) {
-      if (fading && fade < 1) requestAnimationFrame(draw);
-      else fading = null;
-      return;
-    }
-    lastScale = scale;
-    lastId = current.id;
-    lastFade = fadingNow;
     circle.setAttribute('cx', arrayAt.x.toFixed(2));
     circle.setAttribute('cy', arrayAt.y.toFixed(2));
-    circle.setAttribute('r', (r * scale).toFixed(2));
-    const transform = `translate(${refAt.x.toFixed(2)} ${refAt.y.toFixed(2)}) scale(${scale.toFixed(6)})`;
+    circle.setAttribute('r', (shownR * drawScale).toFixed(2));
+    const transform = `translate(${refAt.x.toFixed(2)} ${refAt.y.toFixed(2)}) scale(${drawScale.toFixed(6)})`;
     toG.setAttribute('transform', transform);
-    const reveal = fading ? fade : 1;
-    const show = fading ? fade : 1;
-    paintPath(toFaint, current.dFaint, show * 0.4, reveal, `${current.id}:faint`);
-    paintPath(toMain, current.dLines, show, reveal, `${current.id}:lines`);
+    if (drawnId !== current.id) {
+      mountPaths(toG, current, true);
+      drawnId = current.id;
+    }
     if (previous) {
       fromG.setAttribute('display', '');
       fromG.setAttribute('transform', transform);
-      paintPath(fromFaint, previous.dFaint, (1 - fade) * 0.4, 1, `${previous.id}:faint`);
-      paintPath(fromMain, previous.dLines, 1 - fade, 1, `${previous.id}:lines`);
+      fromG.style.opacity = (1 - fade).toFixed(3);
+      if (fromG.dataset.ref !== previous.id) {
+        mountPaths(fromG, previous, false);
+        fromG.dataset.ref = previous.id;
+      }
     } else {
       fromG.setAttribute('display', 'none');
+      fromG.style.opacity = '0';
+      if (fromG.childElementCount) fromG.replaceChildren();
+      fromG.dataset.ref = '';
     }
+    const scaleGap = Math.abs(shownScale - scale) / Math.max(scale, 1e-6);
+    const radiusGap = Math.abs(shownR - r) / Math.max(r, 1e-6);
     if (fading && fade < 1) requestAnimationFrame(draw);
-    else fading = null;
+    else if (scaleGap > 0.004 || radiusGap > 0.004) requestAnimationFrame(draw);
+    else {
+      fading = null;
+      shownScale = scale;
+      shownR = r;
+    }
   };
 
   const schedule = () => {
@@ -395,7 +411,7 @@ export function mountScaleInset(overlay: HTMLElement): { setArea: (m2: number) =
     });
   };
 
-  const commit = (next: Shape) => {
+  const applyReference = (next: Shape) => {
     if (shown && shown.id !== next.id) fading = { from: shown, to: next, t0: performance.now() };
     shown = next;
     schedule();
@@ -420,16 +436,23 @@ export function mountScaleInset(overlay: HTMLElement): { setArea: (m2: number) =
       }
       const wait = () => {
         if (!pending || pending.id !== next.id) return;
-        if (performance.now() - pendingAt < 300) {
+        if (performance.now() - pendingAt < 250) {
           window.setTimeout(wait, 40);
           return;
         }
         const chosen = pending;
         pending = null;
-        if (chosen.id !== shown?.id) commit(chosen);
+        if (chosen.id !== shown?.id) applyReference(chosen);
         else schedule();
       };
-      window.setTimeout(wait, 300);
+      window.setTimeout(wait, 250);
+      schedule();
+    },
+    commit() {
+      pending = null;
+      const next = closest(area);
+      if (!shown || shown.id !== next.id) applyReference(next);
+      else schedule();
     },
   };
 }

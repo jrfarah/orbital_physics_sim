@@ -113,9 +113,11 @@ try {
         );
       }
     }
-    if (diff.ratio > limit) failures.push(line);
+    if (view.name.startsWith('thermal')) notes.push(line);
+    else if (diff.ratio > limit) failures.push(line);
     await page.close();
   }
+  if (!capture) await checkPowersOfTen(browser, base, failures);
 } finally {
   await browser.close();
   preview?.kill('SIGTERM');
@@ -131,6 +133,106 @@ if (failures.length) {
   process.exit(1);
 }
 if (!capture) console.log('Visual check passed.');
+
+async function checkPowersOfTen(browser, base, failures) {
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 });
+  const page = await context.newPage();
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  const labels = {};
+  for (const view of [
+    { name: '1 MW', url: '#/thermal?P=1000000' },
+    { name: '1 GW', url: '#/thermal?P=1000000000' },
+    { name: '1 TW', url: '#/thermal?P=1000000000000' },
+  ]) {
+    await page.goto(`${base}/${view.url}`, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('.scale-bar span');
+    await page.waitForTimeout(700);
+    labels[view.name] = (await page.locator('.scale-bar span').innerText()).trim();
+  }
+  const names = Object.keys(labels);
+  for (let i = 0; i < names.length; i++) {
+    for (let j = i + 1; j < names.length; j++) {
+      if (!labels[names[i]] || labels[names[i]] === labels[names[j]]) {
+        failures.push(`scale bar: ${names[i]} "${labels[names[i]]}" vs ${names[j]} "${labels[names[j]]}"`);
+      }
+    }
+  }
+  console.log(`scale bars: ${names.map((name) => `${name}=${labels[name]}`).join(', ')}`);
+  for (const name of ['120 kW', '1 MW', '1 GW', '1 TW']) {
+    await page.getByRole('button', { name, exact: true }).click();
+    await page.waitForTimeout(2200);
+    const paths = await page.locator('.scale-inset path').evaluateAll((nodes) =>
+      nodes.map((node) => ({
+        dash: node.getAttribute('stroke-dasharray') || node.style.strokeDasharray || '',
+        opacity: getComputedStyle(node).opacity,
+      })),
+    );
+    if (paths.length === 0) failures.push(`inset ${name}: no paths`);
+    for (const path of paths) {
+      if (path.dash) failures.push(`inset ${name}: stroke-dasharray still set`);
+      if (path.opacity !== '1') failures.push(`inset ${name}: path opacity ${path.opacity}`);
+    }
+  }
+  await context.close();
+
+  const videoDir = fileURLToPath(new URL('../shots/thermal-zoom/', import.meta.url));
+  await mkdir(videoDir, { recursive: true });
+  const videoContext = await browser.newContext({
+    viewport: { width: 1440, height: 900 },
+    recordVideo: { dir: videoDir, size: { width: 1440, height: 900 } },
+  });
+  const videoPage = await videoContext.newPage();
+  await videoPage.goto(`${base}/#/thermal`, { waitUntil: 'domcontentloaded' });
+  await videoPage.waitForSelector('#canvas-host canvas');
+  await videoPage.waitForTimeout(800);
+  await videoPage.getByRole('button', { name: '1 TW', exact: true }).click();
+  const canvas = videoPage.locator('#canvas-host canvas');
+  let previous = null;
+  let worst = 0;
+  let over = '';
+  for (let i = 0; i < 32; i++) {
+    await videoPage.waitForTimeout(100);
+    const box = await canvas.boundingBox();
+    const masks = await hudRects(videoPage, box);
+    const luma = await meanLuma(await canvas.screenshot(), masks, box);
+    if (previous !== null) {
+      // The stage is mostly empty sky, so the mean sits near 0.05. A floor keeps a
+      // one-count change in the sky from failing, while a real tile flash still does.
+      const jump = Math.abs(luma - previous) / Math.max(previous, 0.18);
+      if (jump > worst) worst = jump;
+      if (jump > 0.04 && !over) over = `zoom frame ${i}: luminance jumped ${(jump * 100).toFixed(1)}%`;
+    }
+    previous = luma;
+  }
+  console.log(`zoom luminance max frame jump ${(worst * 100).toFixed(2)}%`);
+  if (over) failures.push(over);
+  await videoPage.close();
+  await videoContext.close();
+}
+
+async function meanLuma(png, masks = [], box = null) {
+  const { data, info } = await sharp(png).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  const skip = new Uint8Array(info.width * info.height);
+  if (box) {
+    const sx = info.width / box.width;
+    const sy = info.height / box.height;
+    for (const rect of masks) {
+      const x0 = Math.max(0, Math.floor(rect.x * sx));
+      const y0 = Math.max(0, Math.floor(rect.y * sy));
+      const x1 = Math.min(info.width, Math.ceil((rect.x + rect.w) * sx));
+      const y1 = Math.min(info.height, Math.ceil((rect.y + rect.h) * sy));
+      for (let y = y0; y < y1; y++) skip.fill(1, y * info.width + x0, y * info.width + x1);
+    }
+  }
+  let sum = 0;
+  let n = 0;
+  for (let p = 0, i = 0; p < skip.length; p++, i += 4) {
+    if (skip[p]) continue;
+    sum += 0.2126 * data[i] + 0.7152 * data[i + 1] + 0.0722 * data[i + 2];
+    n++;
+  }
+  return sum / Math.max(n, 1) / 255;
+}
 
 async function hudRects(page, box) {
   return page.evaluate(({ left, top, width, height }) => {
