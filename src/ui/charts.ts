@@ -7,6 +7,8 @@ export interface ChartSeries {
   width?: number;
   /** Draw the series name at the last finite point instead of in a legend. */
   endLabel?: boolean;
+  /** Draw the series name at its highest sample. */
+  peakLabel?: boolean;
 }
 
 export interface ChartSpec {
@@ -123,6 +125,7 @@ export function createChart(host: HTMLElement, aspect = 1.7): { draw: (spec: Cha
       }
     }
     const ends: { name: string; x: number; y: number; color: string }[] = [];
+    const peaks: { name: string; x: number; y: number; color: string }[] = [];
     ctx.save();
     ctx.beginPath();
     ctx.rect(left, top, plotW, plotH);
@@ -135,9 +138,13 @@ export function createChart(host: HTMLElement, aspect = 1.7): { draw: (spec: Cha
       let started = false;
       let lastX = 0;
       let lastY = 0;
+      let peakValue = -Infinity;
+      let peakX = 0;
+      let peakY = 0;
       for (let i = 0; i < series.xs.length; i++) {
         const x = series.xs[i];
-        let y = series.ys[i];
+        const raw = series.ys[i] ?? 0;
+        let y = raw;
         if (!Number.isFinite(y) || (spec.yLog && y <= 0)) {
           started = false;
           continue;
@@ -151,20 +158,43 @@ export function createChart(host: HTMLElement, aspect = 1.7): { draw: (spec: Cha
         } else ctx.lineTo(px, py);
         lastX = px;
         lastY = py;
+        if (raw > peakValue) {
+          peakValue = raw;
+          peakX = px;
+          peakY = py;
+        }
       }
       ctx.stroke();
       if (series.endLabel && started) ends.push({ name: series.name, x: lastX, y: lastY, color: series.color });
+      if (series.peakLabel && started) peaks.push({ name: series.name, x: peakX, y: peakY, color: series.color });
     }
     ctx.restore();
-    const boxes = [];
+    const boxes: { text: string; x: number; y: number; w: number; h: number }[] = [];
+    const pin = (name: string, x: number, y: number, color: string): boolean => {
+      if (!place(name, x, y, color, false)) return false;
+      const box = placed[placed.length - 1]!;
+      boxes.push({ text: name, x: box.x, y: box.y, w: box.w, h: box.h });
+      return true;
+    };
     for (const end of ends) {
       const guess = end.name.length * 6.6 + 8;
       const x = Math.max(left + 4, Math.min(end.x, left + plotW) - guess);
       const y = Math.max(top + 2, end.y - 16);
-      const placedOk = place(end.name, x, y, end.color, false) || place(end.name, x, Math.max(top + 2, y - 14), end.color, false);
-      if (placedOk) {
-        const box = placed[placed.length - 1]!;
-        boxes.push({ text: end.name, x: box.x, y: box.y, w: box.w, h: box.h });
+      pin(end.name, x, y, end.color) || pin(end.name, x, Math.max(top + 2, y - 14), end.color);
+    }
+    for (const peak of peaks) {
+      const guess = peak.name.length * 6.6 + 8;
+      const xs = [peak.x + 8, Math.max(left + 4, peak.x - guess)];
+      const ys = [peak.y - 16, peak.y - 32, peak.y - 48, peak.y + 4, peak.y + 18];
+      let parked = false;
+      for (const x of xs) {
+        for (const y of ys) {
+          if (pin(peak.name, Math.max(left + 2, x), Math.max(top + 2, y), peak.color)) {
+            parked = true;
+            break;
+          }
+        }
+        if (parked) break;
       }
     }
     const origin = host.getBoundingClientRect();

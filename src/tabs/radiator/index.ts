@@ -207,7 +207,7 @@ export function createRadiatorTab(summary: (text: string) => void) {
     maybeCapture(frame.up, frame.north, n);
     legend.setMarkers(result.A.T_sink, result.B.T_sink);
     const selected = state.face === 'A' ? result.A : result.B;
-    spectrum.setFace(state.face, selected, coat.eps, state.tempK);
+    spectrum.setFace(state.face, selected);
     const sky = Math.round(earthSkyFraction(state.hKm) * 100);
     const sun = faceSeesSun(state.hKm, r) ? 'in sunlight' : "in Earth's shadow";
     foot.textContent = `Altitude ${Math.round(state.hKm)} km · Earth fills ${sky}% of the sky · ${sun}`;
