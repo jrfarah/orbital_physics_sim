@@ -146,7 +146,7 @@ export function mountRenderer(container: HTMLElement): void {
   });
   renderer.outputColorSpace = SRGBColorSpace;
   renderer.toneMapping = ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1;
+  renderer.toneMappingExposure = 1.15;
   renderer.setClearColor(0x05070c, 1);
   ratio = initialRatio();
   const overlay = document.getElementById('gl-overlay');
