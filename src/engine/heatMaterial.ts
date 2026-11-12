@@ -4,12 +4,14 @@ import {
   MeshStandardMaterial,
   NoColorSpace,
   RGBAFormat,
+  ShaderMaterial,
   SRGBColorSpace,
   UnsignedByteType,
   Vector2,
+  Vector3,
   type WebGLProgramParametersWithUniforms,
 } from 'three';
-import { getEmberNoise, getNoiseTexture, sampleNoise } from './noise';
+import { getEmberNoise, sampleNoise } from './noise';
 
 const STOPS: { t: number; rgb: [number, number, number] }[] = [
   { t: 0, rgb: [18, 3, 2] },
@@ -140,96 +142,149 @@ export interface HeatMaterial extends MeshStandardMaterial {
   userData: { heat: { value: number }; time: { value: number }; side: { value: number } };
 }
 
-const TILE_GLSL = /* glsl */ `
-vec3 srgbToLin(vec3 c){
-  return mix(c/12.92, pow((c+0.055)/1.055, vec3(2.4)), step(vec3(0.04045), c));
-}
-vec3 emberRamp(float k){
-  vec3 c0 = srgbToLin(vec3(42.0, 8.0, 4.0)/255.0);
-  vec3 c1 = srgbToLin(vec3(122.0, 23.0, 10.0)/255.0);
-  vec3 c2 = srgbToLin(vec3(194.0, 52.0, 26.0)/255.0);
-  vec3 c3 = srgbToLin(vec3(255.0, 122.0, 46.0)/255.0);
-  if (k < 0.35) return mix(c0, c1, clamp(k/0.35, 0.0, 1.0));
-  if (k < 0.65) return mix(c1, c2, clamp((k-0.35)/0.30, 0.0, 1.0));
-  return mix(c2, c3, clamp((k-0.65)/0.35, 0.0, 1.0));
+const SOLAR_VERT = /* glsl */ `
+attribute float aScale;
+attribute float aMix;
+varying float vMix;
+varying vec2 vUv;
+varying vec3 vWorld;
+varying vec3 vNormalW;
+
+void main() {
+  vUv = uv;
+  vMix = aMix;
+  vec3 p = position * aScale;
+  #ifdef USE_INSTANCING
+    vec4 world = modelMatrix * instanceMatrix * vec4(p, 1.0);
+    vNormalW = normalize(mat3(modelMatrix) * mat3(instanceMatrix) * normal);
+  #else
+    vec4 world = modelMatrix * vec4(p, 1.0);
+    vNormalW = normalize(mat3(modelMatrix) * normal);
+  #endif
+  vWorld = world.xyz;
+  gl_Position = projectionMatrix * viewMatrix * world;
 }
 `;
 
-function createTileMaterial(heat01: number): HeatMaterial {
-  const heat = { value: heat01 };
-  const mat = new MeshStandardMaterial({
-    color: 0x3d424a,
-    metalness: 0.85,
-    roughness: 0.38,
-    map: whiteMap(),
-    envMap: null,
-    envMapIntensity: 0,
-  }) as HeatMaterial;
-  mat.userData.heat = heat;
-  mat.userData.time = { value: 0 };
-  mat.userData.side = { value: 1 };
-  mat.customProgramCacheKey = () => 'heat-tiles-v2';
-  mat.onBeforeCompile = (shader: WebGLProgramParametersWithUniforms) => {
-    shader.uniforms.uHeat = heat;
-    shader.uniforms.uNoise = { value: getNoiseTexture() };
-    shader.uniforms.uNoiseOffset = { value: new Vector2(0, 0) };
-    shader.uniforms.uNoiseRotation = { value: 0 };
-    shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', '#include <common>\nattribute float aScale;\nattribute float aMix;\nvarying float vMix;')
-      .replace('#include <begin_vertex>', 'vec3 transformed = vec3(position) * aScale;\nvMix = aMix;');
-    shader.fragmentShader = shader.fragmentShader
-      .replace(
-        '#include <common>',
-        `#include <common>
-uniform float uHeat;
-uniform sampler2D uNoise;
-uniform vec2 uNoiseOffset;
-uniform float uNoiseRotation;
+const SOLAR_FRAG = /* glsl */ `
+uniform float uOpacity;
+uniform vec3 uLightDir;
 varying float vMix;
-${TILE_GLSL}`,
-      )
-      .replace(
-        '#include <map_fragment>',
-        `#include <map_fragment>
-vec2 heatUv = vMapUv;
-float cs = cos(uNoiseRotation);
-float sn = sin(uNoiseRotation);
-heatUv = mat2(cs, sn, -sn, cs) * heatUv + uNoiseOffset;
-float n = texture2D(uNoise, heatUv).r;
-float edge = 1.0 - smoothstep(0.0, 0.5, min(min(heatUv.x, 1.0-heatUv.x), min(heatUv.y, 1.0-heatUv.y)));
-float field = 0.65 * n + 0.35 * (1.0 - edge);
-float threshold = 1.0 - uHeat;
-float k = uHeat < 0.02 ? 0.0 : smoothstep(threshold - 0.05, threshold + 0.05, 1.0 - field);
-vec3 ember = emberRamp(k);
-vec3 warm = srgbToLin(vec3(122.0, 23.0, 10.0)/255.0);
-diffuseColor.rgb = mix(diffuseColor.rgb, warm, 0.06 * uHeat);
-vec3 solar = srgbToLin(vec3(22.0, 48.0, 110.0)/255.0);
-float cell = min(abs(fract(heatUv.x * 5.0) - 0.5), abs(fract(heatUv.y * 7.0) - 0.5));
-float grid = smoothstep(0.02, 0.07, cell);
-vec3 solarCol = solar * mix(0.62, 1.0, grid);
-diffuseColor.rgb = solarCol;`,
-      )
-      .replace(
-        '#include <roughnessmap_fragment>',
-        `#include <roughnessmap_fragment>
-float streak = texture2D(uNoise, heatUv * vec2(8.0, 1.0)).r;
-roughnessFactor *= mix(0.82, 1.18, streak);
-roughnessFactor = 0.42;`,
-      )
-      .replace('#include <metalnessmap_fragment>', '#include <metalnessmap_fragment>\nmetalnessFactor = 0.12;')
-      .replace(
-        '#include <emissivemap_fragment>',
-        `#include <emissivemap_fragment>
-totalEmissiveRadiance = solarCol * 0.25;`,
-      )
-      .replace(
-        '#include <opaque_fragment>',
-        `#include <opaque_fragment>
-gl_FragColor.a *= vMix;`,
-      );
+varying vec2 vUv;
+varying vec3 vWorld;
+varying vec3 vNormalW;
+
+vec3 srgb(vec3 c) {
+  return pow(max(c, vec3(0.0)), vec3(2.2));
+}
+
+void main() {
+  float alpha = uOpacity * vMix;
+  if (alpha < 0.01) discard;
+
+  vec3 alum = srgb(vec3(138.0, 150.0, 166.0) / 255.0);
+  vec3 alumEdge = srgb(vec3(176.0, 186.0, 198.0) / 255.0);
+  vec3 back = srgb(vec3(201.0, 211.0, 223.0) / 255.0);
+  vec3 c0 = srgb(vec3(10.0, 23.0, 54.0) / 255.0);
+  vec3 c1 = srgb(vec3(17.0, 41.0, 90.0) / 255.0);
+  vec3 silver = srgb(vec3(163.0, 174.0, 189.0) / 255.0);
+
+  vec2 uv = vUv;
+  vec2 fw = fwidth(uv);
+  float texel = max(fw.x, fw.y);
+  float tilePx = 1.0 / max(texel, 1e-5);
+  float cellPx = tilePx * (0.94 / 8.0);
+
+  vec2 tileEdge = min(uv, 1.0 - uv);
+  float frameDist = min(tileEdge.x, tileEdge.y);
+  float frameAa = min(texel, 0.008);
+  float frameCov = 1.0 - smoothstep(0.03 - frameAa, 0.03 + frameAa, frameDist);
+  frameCov *= smoothstep(1.0, 2.5, 0.03 * tilePx);
+  vec3 frameCol = mix(alumEdge, alum, clamp(frameDist / 0.03, 0.0, 1.0));
+
+  vec2 p = (uv - 0.03) / 0.94;
+  vec2 cellUv = p * 8.0;
+  vec2 cellId = floor(cellUv);
+  vec2 f = fract(cellUv);
+  vec2 fwCell = fwidth(cellUv);
+  float gapDist = min(min(f.x, 1.0 - f.x), min(f.y, 1.0 - f.y));
+  float gapAa = min(max(fwCell.x, fwCell.y), 0.008);
+  float gapN = max(0.02, min(0.10, 1.15 / max(cellPx, 1.0)));
+  float gapCov = 1.0 - smoothstep(gapN - gapAa, gapN + gapAa, gapDist);
+  float corner = min(
+    min(f.x + f.y, (1.0 - f.x) + f.y),
+    min(f.x + (1.0 - f.y), (1.0 - f.x) + (1.0 - f.y))
+  );
+  float cutAa = min(max(fwCell.x, fwCell.y), 0.03);
+  float cutCov = 1.0 - smoothstep(0.12 - cutAa, 0.12 + cutAa, corner);
+  float inside = step(0.0, p.x) * step(p.x, 1.0) * step(0.0, p.y) * step(p.y, 1.0);
+  float gapVis = smoothstep(8.0, 14.0, cellPx);
+  float cutVis = smoothstep(10.0, 18.0, cellPx);
+  float sheet = max(gapCov * gapVis, cutCov * cutVis) * inside * (1.0 - frameCov);
+
+  float hash = fract(sin(dot(cellId + 1.0, vec2(127.1, 311.7))) * 43758.5453);
+  vec3 cell = mix(c0, c1, hash) * mix(0.92, 1.05, f.y);
+
+  float fingerFade = smoothstep(8.0, 16.0, cellPx) * smoothstep(0.6, 1.4, cellPx * 0.008);
+  float busFade = smoothstep(3.0, 7.0, cellPx) * smoothstep(0.7, 1.6, cellPx * 0.015);
+  float fy = abs(fract(f.y * 10.0) - 0.5);
+  float fingerAa = min(fwidth(f.y * 10.0), 0.02);
+  float finger = 1.0 - smoothstep(0.04, 0.04 + fingerAa, fy);
+  float busAa = min(fwCell.x, 0.004);
+  float bus = 0.0;
+  bus = max(bus, 1.0 - smoothstep(0.0075, 0.0075 + busAa, abs(f.x - 0.25)));
+  bus = max(bus, 1.0 - smoothstep(0.0075, 0.0075 + busAa, abs(f.x - 0.50)));
+  bus = max(bus, 1.0 - smoothstep(0.0075, 0.0075 + busAa, abs(f.x - 0.75)));
+  float line = inside * (1.0 - frameCov) * (1.0 - sheet);
+  cell = mix(cell, silver, finger * 0.06 * fingerFade * line);
+  cell = mix(cell, silver, bus * busFade * line);
+
+  vec3 col = mix(cell, back, sheet);
+  col = mix(col, frameCol, frameCov);
+
+  // Area weights: cell body 0.796, backsheet 0.088, frame 0.116.
+  // Mixed in sRGB so the bright frame does not erase the cell color.
+  vec3 average = srgb((
+    vec3(13.5, 32.0, 72.0) * 0.796 +
+    vec3(201.0, 211.0, 223.0) * 0.088 +
+    vec3(138.0, 150.0, 166.0) * 0.116
+  ) / 255.0);
+  float detail = smoothstep(2.0, 4.0, cellPx);
+  col = mix(average, col, detail);
+
+  vec3 N = normalize(vNormalW);
+  vec3 L = normalize(uLightDir);
+  vec3 V = normalize(cameraPosition - vWorld);
+  vec3 H = normalize(L + V);
+  float ndl = max(dot(N, L), 0.0);
+  float spec = pow(max(dot(N, H), 0.0), 40.0) * 0.3 * ndl;
+  vec3 color = col * (0.38 + 0.62 * ndl) + vec3(spec);
+  #ifdef TONE_MAPPING
+    color = toneMapping(color);
+  #else
+    color *= 1.15;
+    color = clamp((color * (2.51 * color + 0.03)) / (color * (2.43 * color + 0.59) + 0.14), 0.0, 1.0);
+  #endif
+  gl_FragColor = linearToOutputTexel(vec4(color, alpha));
+}
+`;
+
+/** Procedural monocrystalline panel. No textures. */
+export function createSolarMaterial(): ShaderMaterial {
+  const uOpacity = { value: 1 };
+  const mat = new ShaderMaterial({
+    uniforms: {
+      uOpacity,
+      uLightDir: { value: new Vector3(0.4, 1, 0.7).normalize() },
+    },
+    vertexShader: SOLAR_VERT,
+    fragmentShader: SOLAR_FRAG,
+    transparent: true,
+    depthWrite: false,
+  });
+  mat.onBeforeRender = () => {
+    uOpacity.value = mat.opacity;
   };
-  mat.transparent = true;
-  mat.depthWrite = false;
   return mat;
 }
 
@@ -368,8 +423,7 @@ export function createHeatMaterial(
   tiles = false,
   noise: { offset: [number, number]; rotation: number; scale?: number } = { offset: [0, 0], rotation: 0 },
 ): HeatMaterial {
-  if (tiles) return createTileMaterial(heat01);
-  return createEmberMaterial({ heat01, noise });
+  return createEmberMaterial({ instanced: tiles, heat01, noise });
 }
 
 export function setHeat(mat: HeatMaterial, heat01: number): void {

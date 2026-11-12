@@ -8,6 +8,7 @@ import {
   InstancedMesh,
   LineBasicMaterial,
   LineSegments,
+  Material,
   Mesh,
   MeshStandardMaterial,
   Object3D,
@@ -15,7 +16,7 @@ import {
   Scene,
   Vector3,
 } from 'three';
-import { createEmberMaterial, createHeatMaterial, setHeat, type HeatMaterial } from '../../engine/heatMaterial';
+import { createEmberMaterial, createSolarMaterial, setHeat, type HeatMaterial } from '../../engine/heatMaterial';
 import { LAYER_EMBER } from '../../engine/post';
 import {
   clearUserOrbit,
@@ -41,7 +42,7 @@ interface Slot {
   mesh: InstancedMesh;
   solar: InstancedMesh;
   mat: HeatMaterial;
-  solarMat: HeatMaterial;
+  solarMat: Material;
   scale: InstancedBufferAttribute;
   solarScale: InstancedBufferAttribute;
   mix: InstancedBufferAttribute;
@@ -451,11 +452,9 @@ function makeSlot(): Slot {
   solarGeo.setAttribute('aScale', solarScale);
   solarGeo.setAttribute('aMix', solarMix);
   const mat = createEmberMaterial({ instanced: true, heat01: 0.51 });
-  const solarMat = createHeatMaterial(0, true);
+  const solarMat = createSolarMaterial();
   mat.envMap = null;
   mat.envMapIntensity = 0;
-  solarMat.envMap = null;
-  solarMat.envMapIntensity = 0;
   const mesh = new InstancedMesh(geo, mat, MAX);
   const solar = new InstancedMesh(solarGeo, solarMat, MAX);
   mesh.layers.enable(LAYER_EMBER);
