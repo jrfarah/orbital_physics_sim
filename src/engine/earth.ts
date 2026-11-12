@@ -96,8 +96,9 @@ const surfaceFragment = /* glsl */ `
     surface = mix(surface, surface * vec3(1.0, 0.78, 0.6), twilight * 0.5);
 
     vec3 nightCol = mix(texture2D(uNightLo, vUv).rgb, texture2D(uNightHi, vUv).rgb, uMix);
-    vec3 nightGlow = mix(texture2D(uNightLo, vUv, 4.0).rgb, texture2D(uNightHi, vUv, 4.0).rgb, uMix);
-    vec3 lights = (nightCol * 1.6 + nightGlow * 0.9) * vec3(1.0, 0.85, 0.6) * (1.0 - day) * (1.0 - 0.75 * cloudHere);
+    // Coarser mip of the same city map: a wider halo, still one sample per texture.
+    vec3 nightGlow = mix(texture2D(uNightLo, vUv, 5.5).rgb, texture2D(uNightHi, vUv, 5.5).rgb, uMix);
+    vec3 lights = (nightCol * 2.1 + nightGlow * 3.4) * vec3(1.05, 0.78, 0.45) * (1.0 - day) * (1.0 - 0.75 * cloudHere);
 
     float fres = pow(1.0 - max(dot(N, V), 0.0), 2.5);
     float haze = fres * 0.55 * smoothstep(-0.2, 0.4, NdotL);
