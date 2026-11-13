@@ -461,7 +461,13 @@
 .delta.good { color: var(--good); background: rgba(61, 220, 151, 0.14); }
 .area-leaders line { stroke: rgba(197, 204, 214, 0.85); }
 .info { margin-left: 4px; padding: 0; border: 0; background: none; color: var(--accent); font-size: 13px; }
-.popover { margin-top: 8px; padding: 8px; border: 1px solid var(--panel-border); border-radius: 8px; font-size: 13px; }
+.popover { margin-top: 8px; padding: 8px; border: 1px solid var(--panel-border); border-radius: 8px; font-size: 13px; overflow-wrap: anywhere; }
+.pop-line + .pop-line { margin-top: 8px; }
+.hero-status { font-weight: 600; font-size: 15px; line-height: 1.3; margin-top: 4px; }
+.hero-figure { display: flex; align-items: flex-start; gap: 6px; min-width: 0; }
+.hero-figure > .num-xl, .hero-figure > .hero-copy { flex: 1; min-width: 0; }
+.hero-copy { font-size: 13px; line-height: 1.4; }
+.tip-host { min-width: 0; }
 .text-link { margin: 4px 0 8px; padding: 0; border: 0; background: none; color: var(--accent); font-size: 13px; text-align: left; }
 .reticle { position: absolute; }
 .reticle i { position: absolute; width: 8px; height: 8px; border: 0 solid #5ce1ff; }

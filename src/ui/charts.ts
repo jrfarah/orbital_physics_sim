@@ -197,10 +197,9 @@ export function createChart(host: HTMLElement, aspect = 1.7): { draw: (spec: Cha
         if (parked) break;
       }
     }
-    const origin = host.getBoundingClientRect();
     host.setAttribute(
       'data-boxes',
-      JSON.stringify(boxes.map((box) => ({ text: box.text, x: origin.left + box.x, y: origin.top + box.y, w: box.w, h: box.h }))),
+      JSON.stringify(boxes.map((box) => ({ text: box.text, x: box.x, y: box.y, w: box.w, h: box.h }))),
     );
     ctx.setLineDash([]);
     if (spec.vLines) {

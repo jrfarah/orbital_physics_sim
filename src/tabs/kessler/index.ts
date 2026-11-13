@@ -1,6 +1,6 @@
 import { content } from '../../content';
 import { openEquations, openSources } from '../../ui/drawer';
-import { fmtArea, fmtBig, fmtSig, fmtUSD } from '../../ui/format';
+import { fmtArea, fmtBig, fmtDuration, fmtSig, fmtUSD } from '../../ui/format';
 import { bigNumber, card, el } from '../../ui/readout';
 import {
   createButtonRow,
@@ -13,8 +13,10 @@ import {
 } from '../../ui/controls';
 import { isMobile, reducedMotion, setActiveView } from '../../engine/renderer';
 import {
+  cascadeTimescale,
   kessler,
   kesslerShellRates,
+  type KesslerInput,
   type KesslerResult,
   type Preset,
 } from '../../physics/kessler';
@@ -91,6 +93,59 @@ function sizeChip(area: number): string {
   return `${fmtArea(area)} · ${across.toLocaleString('en-US')} m`;
 }
 
+function fmtCascadeTime(years: number): string {
+  if (!Number.isFinite(years)) return '—';
+  const days = years * 365.25;
+  if (days * 24 < 1) return 'under an hour';
+  if (days < 2) return cascadeUnit(days * 24, 'hour');
+  if (days < 60) return cascadeUnit(days, 'day');
+  if (years < 2) return cascadeUnit(years * 12, 'month');
+  return cascadeUnit(years, 'year');
+}
+
+function cascadeUnit(value: number, name: string): string {
+  const text = fmtSig(value, 2);
+  const n = Number(text.replace(/,/g, ''));
+  return `${text} ${name}${n === 1 ? '' : 's'}`;
+}
+
+function heroPhrase(mode: 'doubling' | 'halving', years: number, faster: boolean): string {
+  const time = fmtCascadeTime(years);
+  const verb = mode === 'doubling' ? 'doubles' : 'halves';
+  const body = time === 'under an hour' ? `Debris ${verb} in under an hour` : `Debris ${verb} every ${time}`;
+  return faster && mode === 'doubling' ? `${body} (or faster)` : body;
+}
+
+function popLine(parts: (string | HTMLElement)[]): HTMLElement {
+  const line = el('div', 'pop-line');
+  for (const part of parts) line.append(typeof part === 'string' ? document.createTextNode(part) : part);
+  return line;
+}
+
+function bindTip(host: HTMLElement, button: HTMLButtonElement, pop: HTMLElement): void {
+  let pinned = false;
+  let over = false;
+  const paint = () => {
+    const open = pinned || over;
+    pop.hidden = !open;
+    button.setAttribute('aria-expanded', open ? 'true' : 'false');
+  };
+  button.addEventListener('click', (event) => {
+    event.preventDefault();
+    pinned = !pinned;
+    paint();
+  });
+  host.addEventListener('mouseenter', () => {
+    over = true;
+    paint();
+  });
+  host.addEventListener('mouseleave', () => {
+    over = false;
+    paint();
+  });
+  paint();
+}
+
 export function createKesslerTab(summary: (text: string) => void) {
   const state = defaults();
   const tip = el('div', 'shell-tip card');
@@ -101,27 +156,55 @@ export function createKesslerTab(summary: (text: string) => void) {
 
   const banner = el('div', 'card hero span-2');
   const titleRow = el('div', 'field-label', 'Debris cascade');
-  const info = el('button', 'info', 'ⓘ');
-  info.type = 'button';
-  info.setAttribute('aria-label', 'What tipping point means');
-  titleRow.append(info);
-  const bannerTitle = el('div', 'num-xl');
-  const bannerSub = el('div');
-  const bannerWarn = el('div', 'caption bad');
-  bannerWarn.hidden = true;
-  const pop = el('div', 'popover');
-  pop.hidden = true;
+  const statusEl = el('div', 'hero-status');
+  const primary = el('div', 'num-xl');
+  const primaryInfo = el('button', 'info', 'ⓘ');
+  primaryInfo.type = 'button';
+  primaryInfo.setAttribute('aria-label', 'What this number means');
+  const tauText = el('span');
+  const primaryPop = el('div', 'popover');
+  primaryPop.append(
+    popLine([
+      el('b', '', 'What this number means.'),
+      ' Every collision makes fragments. Each fragment either hits something else, making more fragments, or falls out of orbit, after about ',
+      tauText,
+      ' at this altitude. R₀ is how many new collisions one collision causes before its fragments fall out.',
+    ]),
+    popLine([
+      'If R₀ is above 1, debris breeds faster than it decays and grows exponentially. It doubles in about τ·ln2/(R₀−1). If R₀ is below 1, it dies away, halving in about τ·ln2/(1−R₀).',
+    ]),
+    popLine([
+      'This is a simplified, order-of-magnitude model. Its inputs are uncertain by up to about 10×. So a doubling time of weeks to months means clearly unstable, while one of decades is borderline.',
+    ]),
+  );
+  const primaryHost = el('div', 'tip-host');
+  const primaryRow = el('div', 'hero-figure');
+  primaryRow.append(primary, primaryInfo);
+  primaryHost.append(primaryRow, primaryPop);
+  bindTip(primaryHost, primaryInfo, primaryPop);
+
+  const secondaryText = el('div', 'hero-copy');
+  const secondaryInfo = el('button', 'info', 'ⓘ');
+  secondaryInfo.type = 'button';
+  secondaryInfo.setAttribute('aria-label', 'What tipping point means');
+  const secondaryPop = el('div', 'popover');
   const term = el('b', '', 'Tipping point');
-  pop.append(
+  secondaryPop.append(
     term,
     document.createTextNode(
       ' (R₀ = 1): each collision makes enough debris to cause one more collision before atmospheric drag clears it. Above 1, collisions breed collisions. "33,300× past" means that altitude holds 33,300 times more effective targets than it can sustain.',
     ),
   );
-  info.addEventListener('click', () => {
-    pop.hidden = !pop.hidden;
-  });
-  banner.append(titleRow, bannerTitle, bannerSub, bannerWarn, pop);
+  const secondaryHost = el('div', 'tip-host');
+  const secondaryRow = el('div', 'hero-figure');
+  secondaryRow.append(secondaryText, secondaryInfo);
+  secondaryHost.append(secondaryRow, secondaryPop);
+  bindTip(secondaryHost, secondaryInfo, secondaryPop);
+
+  const worstLine = el('div', 'caption');
+  const bannerWarn = el('div', 'caption bad');
+  bannerWarn.hidden = true;
+  banner.append(titleRow, statusEl, primaryHost, secondaryHost, worstLine, bannerWarn);
 
   const satsCard = card('Satellites in orbit');
   const satsNum = bigNumber(satsCard.body);
@@ -218,6 +301,13 @@ export function createKesslerTab(summary: (text: string) => void) {
       state.area = v;
       wrapped();
     },
+  });
+  const resetSize = el('button', 'text-link', 'reset to SpaceX satellite');
+  resetSize.type = 'button';
+  resetSize.addEventListener('click', () => {
+    state.area = 800;
+    area.setValue(800, true);
+    wrapped();
   });
   const life = createSlider({
     id: 'k-life',
@@ -414,6 +504,7 @@ export function createKesslerTab(summary: (text: string) => void) {
     rate.element,
     rateSnaps,
     area.element,
+    resetSize,
     sizePower,
     sizeNote,
     preset.element,
@@ -480,8 +571,8 @@ export function createKesslerTab(summary: (text: string) => void) {
     wrapped();
   }
 
-  function resultOf(): KesslerResult {
-    return kessler({
+  function inputOf(): KesslerInput {
+    return {
       rateWPerYr: state.rate,
       LYr: state.L,
       pSat: state.area * W_PER_M2,
@@ -495,25 +586,17 @@ export function createKesslerTab(summary: (text: string) => void) {
       coord: state.coord,
       usdPerW: state.usdPerW,
       usdPerKg: state.usdPerKg,
-    });
+    };
+  }
+
+  function resultOf(): KesslerResult {
+    return kessler(inputOf());
   }
 
   function recompute(): void {
     const result = resultOf();
     live().resetSim();
-    const rates = kesslerShellRates({
-      rateWPerYr: state.rate,
-      LYr: state.L,
-      pSat: state.area * W_PER_M2,
-      preset: state.preset,
-      band: state.band,
-      s: state.dodge / 100,
-      fDisp: state.dispPct / 100,
-      fVuln: state.vulnPct / 100,
-      tYr: state.tYr,
-      fFrag: state.fFrag,
-      coord: state.coord,
-    });
+    const rates = kesslerShellRates(inputOf());
     sizePower.textContent = fmtPower(state.area * W_PER_M2);
     const count = live().apply(result.shells, {
       area: result.A_sat,
@@ -524,21 +607,22 @@ export function createKesslerTab(summary: (text: string) => void) {
     });
     const style = r0Style(result.R0_max);
     const status = result.R0_max < 1 ? 'Stable' : result.R0_max < 10 ? 'Past tipping point' : 'Runaway';
-    bannerTitle.textContent = status;
-    bannerTitle.className = status === 'Past tipping point' ? 'num-lg' : 'num-xl';
-    bannerTitle.style.color = style.css;
-    const worst = result.shells.find((row) => row.h === result.worst_h) ?? result.shells[0];
-    bannerSub.replaceChildren();
-    if (worst) {
-      const where = `Worst altitude: ${worst.hLo.toLocaleString('en-US')}–${worst.hHi.toLocaleString('en-US')} km is `;
-      bannerSub.append(document.createTextNode(where));
-      if (result.R0_max < 1) {
-        bannerSub.append(document.createTextNode(`at ~${Math.round(result.R0_max * 100)}% of the tipping point`));
-      } else {
-        const times = result.R0_max >= 1000 ? fmtBig(result.R0_max) : String(Math.round(result.R0_max));
-        const strong = el('b', '', `${times}× past the tipping point`);
-        bannerSub.append(strong);
-      }
+    statusEl.textContent = status;
+    statusEl.style.color = style.css;
+    const scale = cascadeTimescale(inputOf());
+    const shown = result.shells.find((row) => row.hLo === scale.shellLo && row.hHi === scale.shellHi);
+    primary.textContent = heroPhrase(scale.mode, scale.years, !result.linear_regime_ok);
+    primary.style.color = style.css;
+    tauText.textContent = shown ? fmtDuration(shown.tau) : '';
+    if (shown) {
+      secondaryHost.hidden = false;
+      secondaryText.textContent = `at ${shown.hLo.toLocaleString('en-US')}–${shown.hHi.toLocaleString('en-US')} km · R₀ = ${fmtSig(scale.R0)}`;
+    } else secondaryHost.hidden = true;
+    const worst = result.shells.find((row) => row.h === result.worst_h);
+    const different = Boolean(shown && worst && (worst.hLo !== shown.hLo || worst.hHi !== shown.hHi));
+    worstLine.hidden = !different;
+    if (worst && different) {
+      worstLine.textContent = `Worst R₀: ${fmtSig(result.R0_max)} at ${worst.hLo.toLocaleString('en-US')}–${worst.hHi.toLocaleString('en-US')} km`;
     }
     bannerWarn.hidden = result.linear_regime_ok;
     bannerWarn.textContent = "Off the model's scale: satellites are destroyed faster than replaced.";

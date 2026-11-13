@@ -363,6 +363,42 @@ export function kessler(input: KesslerInput = {}): KesslerResult {
   };
 }
 
+export interface CascadeTimescale {
+  mode: 'doubling' | 'halving';
+  years: number;
+  shellLo: number;
+  shellHi: number;
+  R0: number;
+}
+
+/**
+ * Fastest doubling time among occupied shells with R₀ > 1.
+ * If none are growing, the slowest halving time. A long-lived shell can outrank a higher R₀.
+ */
+export function cascadeTimescale(params: KesslerInput = {}): CascadeTimescale {
+  const shells = kessler(params).shells;
+  let growing: { years: number; shell: ShellRow } | null = null;
+  let clearing: { years: number; shell: ShellRow } | null = null;
+  for (const shell of shells) {
+    if (shell.R0 > 1) {
+      const years = (shell.tau * Math.LN2) / (shell.R0 - 1);
+      if (!growing || years < growing.years) growing = { years, shell };
+    } else {
+      const years = (shell.tau * Math.LN2) / (1 - shell.R0);
+      if (!clearing || years > clearing.years) clearing = { years, shell };
+    }
+  }
+  const picked = growing ?? clearing;
+  if (!picked) return { mode: 'halving', years: Infinity, shellLo: 0, shellHi: 0, R0: 0 };
+  return {
+    mode: growing ? 'doubling' : 'halving',
+    years: picked.years,
+    shellLo: picked.shell.hLo,
+    shellHi: picked.shell.hHi,
+    R0: picked.shell.R0,
+  };
+}
+
 /** (1−s)·N_i / N_crit,i for the active-satellite term. Used by the area-not-count test. */
 export function activeSatelliteTerm(
   rateWPerYr: number,

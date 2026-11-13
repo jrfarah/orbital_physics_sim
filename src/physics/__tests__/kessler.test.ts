@@ -3,6 +3,7 @@ import fixtures from '../../../reference/fixtures.json';
 import {
   SIGMA_SCREEN,
   activeSatelliteTerm,
+  cascadeTimescale,
   debrisLifetimeYr,
   kessler,
   kesslerShellRates,
@@ -93,6 +94,26 @@ describe('kessler', () => {
     for (const [h, value] of Object.entries(shells)) {
       expect(Math.abs((got.R0_by_shell[h] ?? NaN) - value)).toBeLessThanOrEqual(1e-4);
     }
+  });
+
+  it('cascade timescale follows the fastest growth, or the slowest decay', () => {
+    const expectTime = (
+      input: KesslerInput,
+      mode: 'doubling' | 'halving',
+      lo: number,
+      hi: number,
+      years: number,
+    ) => {
+      const got = cascadeTimescale(input);
+      expect(got.mode).toBe(mode);
+      expect(got.shellLo).toBe(lo);
+      expect(got.shellHi).toBe(hi);
+      expect(Math.abs(got.years - years) / years).toBeLessThanOrEqual(1e-3);
+    };
+    expectTime(cases.starlink_today, 'halving', 550, 600, 4.94);
+    expectTime(cases['1GW_spacex'], 'doubling', 850, 900, 0.765);
+    expectTime(cases['1TW_spacex'], 'doubling', 850, 900, 0.000762);
+    expectTime(cases['1GW_low_bestcase'], 'halving', 500, 550, 10.1);
   });
 
   it('active-satellite term depends on area, not satellite count', () => {

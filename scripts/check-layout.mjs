@@ -41,6 +41,7 @@ try {
       await page.goto(`http://127.0.0.1:${port}/#/${tab}`, { waitUntil: 'domcontentloaded' });
       await page.waitForSelector('#canvas-host canvas');
       await page.waitForTimeout(500);
+      if (tab === 'kessler') await openKesslerTips(page);
       if (tab === 'kessler' && width === 1440 && height === 900) {
         const more = page.getByRole('button', { name: 'More detail' });
         if ((await more.count()) && (await more.first().innerText()).includes('▸')) await more.first().click();
@@ -128,6 +129,7 @@ async function auditDevices(origin, offenders) {
         await page.goto(`${origin}#/${tab}`, { waitUntil: 'domcontentloaded' });
         await page.waitForSelector('#canvas-host canvas');
         await page.waitForTimeout(400);
+        if (tab === 'kessler') await openKesslerTips(page);
         offenders.push(...(await audit(page)).map((item) => `${label} ${tab}: ${item}`));
       }
       for (const power of [120e3, 1e9, 1e12]) {
@@ -139,6 +141,15 @@ async function auditDevices(origin, offenders) {
     } finally {
       await launched.close();
     }
+  }
+}
+
+async function openKesslerTips(page) {
+  const buttons = page.locator('.card.hero button.info');
+  const count = await buttons.count();
+  for (let i = 0; i < count; i++) {
+    const button = buttons.nth(i);
+    if ((await button.getAttribute('aria-expanded')) !== 'true') await button.click();
   }
 }
 
@@ -159,8 +170,8 @@ async function audit(page) {
           const parsed = JSON.parse(extra);
           const host = el.getBoundingClientRect();
           for (const box of parsed) {
-            const rect = { x: box.x, y: box.y, w: box.w, h: box.h };
-            const outside = rect.x < host.left - 1 || rect.y < host.top - 1 || rect.x + rect.w > host.right + 1 || rect.y + rect.h > host.bottom + 1;
+            const rect = { x: host.left + box.x, y: host.top + box.y, w: box.w, h: box.h };
+            const outside = box.x < -1 || box.y < -1 || box.x + box.w > host.width + 1 || box.y + box.h > host.height + 1;
             if (outside) problems.push(`clipped "${String(box.text || 'chart').slice(0, 48)}" <data-boxes>`);
             boxes.push({ text: box.text || 'chart', rect, cls: 'data-boxes' });
           }
