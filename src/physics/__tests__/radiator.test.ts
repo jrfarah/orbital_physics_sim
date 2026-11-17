@@ -10,7 +10,7 @@ const scenarios: Record<string, { h: number; r: Vec3; n: Vec3; alpha?: number; e
   terminator_faceA_zenith_500: { h: 500, r: [0, 1, 0], n: [0, 1, 0] },
   noon_edge_on_500: { h: 500, r: [1, 0, 0], n: [0, 1, 0] },
   dawn_dusk_edge_on_2000: { h: 2000, r: [0, 1, 0], n: [0, 0, 1] },
-  dawn_dusk_edge_on_500_whitepaint: { h: 500, r: [0, 1, 0], n: [0, 0, 1], alpha: 0.2, eps: 0.9 },
+  dawn_dusk_edge_on_500_whitepaint: { h: 500, r: [0, 1, 0], n: [0, 0, 1], alpha: 0.15, eps: 0.91 },
 };
 
 const faceKeys = ['F', 'q_sun', 'q_alb', 'q_ir', 'q_abs', 'T_sink', 'q_net'] as const;

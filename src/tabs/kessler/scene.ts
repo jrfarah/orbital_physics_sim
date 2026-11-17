@@ -15,7 +15,7 @@ import {
 } from 'three';
 import { Scene } from 'three';
 import { R_E } from '../../physics/constants';
-import { H_C, SHAPE, V_SH, type ShellRow } from '../../physics/kessler';
+import { H_C, N_BIG, V_SH, type ShellRow } from '../../physics/kessler';
 import { createEarth } from '../../engine/earth';
 import { presenterOn } from '../../engine/presenter';
 import { clearUserOrbit, createControls, getRenderer, isMobile, makeCamera, reducedMotion, requestRender, setEmberGlare, type TabView } from '../../engine/renderer';
@@ -479,7 +479,7 @@ export function createKesslerScene(tip: HTMLElement) {
 
   function buildDebris(): void {
     const n = Math.min(MAX_DEBRIS, debrisBudget());
-    const weight = SHAPE.map((shape, i) => shape * V_SH[i]);
+    const weight = N_BIG.map((density, i) => density * V_SH[i]);
     const total = weight.reduce((a, b) => a + b, 0);
     const rng = mulberry32(0xdeb5);
     const incs = [53, 70, 97.6, 30].map((d) => (d * Math.PI) / 180);

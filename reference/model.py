@@ -100,10 +100,29 @@ def face_spectrum(lam_m, face):
     )
 
 # ================================================= TAB 2: THERMAL BUDGET
-def thermal_budget(P=1.0, T_gpu_max=363.0, dT_chain=30.0, pump=False, T_hot=None,
-                   carnot_frac=0.5, eps=0.9, q_env_face=57.7, pv_eff=0.22,
-                   packing=0.9, sunlit=1.0):
-    """Areas in m^2 for compute power P (W). Two-sided radiator."""
+# S8b: Musk, "250W per sq m for the solar array". Replaces pv_eff × packing × S0.
+ARRAY_W_PER_M2 = 250.0
+# S14: GB200 NVL72 liquid inlet 45 °C and return 65 °C. Default is the loop mean,
+# 55 °C = 328 K, ignoring the coolant-to-radiator drop (optimistic).
+T_LOOP_K = 328.0
+# S13a: AZ-93 white paint, ε = 0.91 ± 0.02, α_s = 0.15 ± 0.02.
+AZ93_EPS = 0.91
+AZ93_ALPHA = 0.15
+# S12: Arpagaus et al. (2018). Most commercial high-temperature heat pumps
+# reach 40-60% of Carnot. Terrestrial industrial data; no space-qualified equivalent.
+CARNOT_FRAC = 0.5
+
+def thermal_budget(P=1.0, T_gpu_max=T_LOOP_K, dT_chain=0.0, pump=False, T_hot=None,
+                   carnot_frac=CARNOT_FRAC, eps=AZ93_EPS, q_env_face=57.7, pv_eff=0.22,
+                   packing=0.9, sunlit=None):
+    """Areas in m^2 for compute power P (W). Two-sided radiator.
+
+    Array area uses ARRAY_W_PER_M2 (S8b). pv_eff and packing stay in the
+    signature as Advanced inputs and do not enter the area. The default
+    sunlit fraction is the group-weighted fleet value.
+    """
+    if sunlit is None:
+        sunlit = FLEET_SUNLIT
     T_cold = T_gpu_max - dT_chain
     if (not pump) or (T_hot is None) or (T_hot <= T_cold):
         T_hot, W = T_cold, 0.0
@@ -112,7 +131,7 @@ def thermal_budget(P=1.0, T_gpu_max=363.0, dT_chain=30.0, pump=False, T_hot=None
     Q_reject = P + W
     q_net = 2.0 * (eps * SIGMA * T_hot ** 4 - q_env_face)
     A_rad = Q_reject / q_net if q_net > 0 else float("inf")
-    A_sol = (P + W) / (S0 * pv_eff * packing * sunlit)
+    A_sol = (P + W) / (ARRAY_W_PER_M2 * sunlit)
     return dict(T_cold=T_cold, T_hot=T_hot, W=W, Q_reject=Q_reject, q_net=q_net,
                 A_rad=A_rad, A_sol=A_sol, A_tot=A_rad + A_sol)
 
@@ -121,21 +140,23 @@ EDGES = np.arange(200, 2001, 50).astype(float)           # 37 edges -> 36 shells
 H_C = 0.5 * (EDGES[:-1] + EDGES[1:])                     # shell centers, km
 V_SH = 4.0 / 3.0 * np.pi * ((R_E + EDGES[1:]) ** 3 - (R_E + EDGES[:-1]) ** 3)  # km^3
 
-def _g(h, mu, s):
-    return np.exp(-0.5 * ((h - mu) / s) ** 2)
-
-# Spatial-density SHAPE: main peak 750-1000 km (NASA ODPO FAQ), secondary ~1400-1500 km
-# (MASTER, e.g. SDC9 sub-10 cm paper), small bump near 550 km, low floor.
-SHAPE = 0.12 * _g(H_C, 550, 60) + 1.0 * _g(H_C, 850, 110) + 0.35 * _g(H_C, 1450, 130) + 0.03
-
-def density_profile(N_total):
-    """objects per km^3 in each shell, normalized so sum(n*V) = N_total."""
-    return N_total * SHAPE / np.sum(SHAPE * V_SH)
-
-N_BIG_LEO = 33_000.0     # >=10 cm non-operational objects in LEO (assumed ~75% of ESA's ~45k)
-N_SMALL_LEO = 900_000.0  # 1-10 cm objects in LEO (assumed ~75% of ESA MASTER-8 1.2 million)
-N_BIG = density_profile(N_BIG_LEO)
-N_SMALL = density_profile(N_SMALL_LEO)
+# S4 CelesTrak SATCAT, built by reference/build_debris_profile.py.
+_DEBRIS_PROFILE_NAME = "debris_profile_satcat_2026-11-17.json"
+_DEBRIS = json.loads(Path(__file__).with_name(_DEBRIS_PROFILE_NAME).read_text())
+# Time-averaged counts per shell. N_BIG is the tracked non-active density, objects/km^3.
+NON_ACTIVE_COUNTS = np.asarray(_DEBRIS["non_active"], float)
+ACTIVE_COUNTS = np.asarray(_DEBRIS["active"], float)
+STARLINK_COUNTS = np.asarray(_DEBRIS["starlink"], float)
+N_BIG = NON_ACTIVE_COUNTS / V_SH
+# S3 MASTER-8 02/2026: 1.5 million at 1-10 cm, and 68,450 >10 cm of which ~11,300 are active.
+# R_small = 1.5e6 / (68450 - 11300) = 26.2. Small debris is given the tracked altitude profile,
+# the same assumption NASA OTPS makes (S2, p. 15).
+ESA_GT_10CM = 68450.0
+ESA_ACTIVE_PAYLOADS = 11300.0
+ESA_1_TO_10CM = 1.5e6
+ESA_1MM_TO_1CM = 230e6
+R_SMALL = ESA_1_TO_10CM / (ESA_GT_10CM - ESA_ACTIVE_PAYLOADS)
+N_SMALL = N_BIG * R_SMALL
 
 def debris_lifetime_yr(h_km):
     """Legacy hand fit: ~5 yr at 550 km, ~100 yr at 800 km, capped at 10,000 yr.
@@ -159,14 +180,24 @@ FRAG_MASS_DIVISOR = 1250.0
 FRAG_DENSITY_COEFF = 92.937
 FRAG_DENSITY_EXP = -0.74
 
-_DENSITY = json.loads(Path(__file__).with_name("density_msis2_f130_ap7.json").read_text())
-_ALT_KM = np.asarray(_DENSITY["alt_km"], float)
-_LOG_RHO = np.log(np.asarray(_DENSITY["rho_kg_m3"], float))
+# S1 default is F10.7 = 130 (Lewis's average solar activity) with Ap = 7.
+# The other switch position is F10.7 = 100 with Ap = 5 (S5, Table 2 comparison).
+SOLAR_F107 = 130
+_DENSITY_FILES = {130: "density_msis2_f130_ap7.json", 100: "density_msis2_f100_ap5.json"}
+_DENSITY = {}
+for _f107, _name in _DENSITY_FILES.items():
+    _table = json.loads(Path(__file__).with_name(_name).read_text())
+    _DENSITY[_f107] = (
+        np.asarray(_table["alt_km"], float),
+        np.log(np.asarray(_table["rho_kg_m3"], float)),
+    )
 
 
-def msis_density(h_km):
+def msis_density(h_km, f107=None):
     """Global-mean NRLMSIS 2.0 density, kg/m^3. log(ρ) is linear in altitude."""
-    return np.exp(np.interp(np.asarray(h_km, float), _ALT_KM, _LOG_RHO))
+    f107 = SOLAR_F107 if f107 is None else int(f107)
+    alt, log_rho = _DENSITY[f107]
+    return np.exp(np.interp(np.asarray(h_km, float), alt, log_rho))
 
 
 def fragment_properties(m_sat):
@@ -187,34 +218,44 @@ def fragment_area_to_mass(m_sat):
     return fragment_properties(m_sat)[3]
 
 
+# S5 Table 2. SpaceX's own area-to-mass for this satellite: (800 m² / 2) / 3000 kg.
+SPACEX_DERELICT_AM = 0.1333
+
+
 def derelict_area_to_mass(A_m2, m_sat):
-    """Mean projected area of a tumbling flat plate, the same A/2 used for sig_d. m^2/kg."""
+    """Mean projected area of a tumbling flat plate, m^2/kg.
+
+    The 800 m², 3000 kg satellite uses the value SpaceX itself uses (S5).
+    Every other fleet keeps (A/2)/m.
+    """
+    if A_m2 == SPACEX_A_SAT and m_sat == SPACEX_M_SAT:
+        return SPACEX_DERELICT_AM
     return (A_m2 / 2.0) / m_sat
 
 
-def _drag_seconds_per_unit_am(h_km):
+def _drag_seconds_per_unit_am(h_km, f107=None):
     """Seconds per (m^2/kg) for |da/dt| at altitude h. Lewis 2026 Eq. 10 without A/m.
 
     |da/dt| = ρ C_D (A/m) sqrt(GM · a), a = R_E + h, so time scales as 1/(A/m).
     """
     h = np.asarray(h_km, float)
     a_m = (R_E + h) * 1000.0
-    return 1.0 / (msis_density(h) * C_D * np.sqrt(GM * a_m))
+    return 1.0 / (msis_density(h, f107) * C_D * np.sqrt(GM * a_m))
 
 
-def _reentry_seconds_per_unit_am(h_km):
+def _reentry_seconds_per_unit_am(h_km, f107=None):
     """∫_125km^h dh / |da/dt| per unit A/m. Trapezoid on the 5 km density table."""
     h = float(h_km)
     if h <= H_REENTRY_KM:
         return 0.0
     n = int(round((h - H_REENTRY_KM) / 5.0))
     hs = H_REENTRY_KM + 5.0 * np.arange(n + 1)
-    f = _drag_seconds_per_unit_am(hs)
+    f = _drag_seconds_per_unit_am(hs, f107)
     x = hs * 1000.0
     return float(np.sum((f[1:] + f[:-1]) * np.diff(x) * 0.5))
 
 
-def timescales_yr(h_km, A_m2, m_sat, lifetime_model=None):
+def timescales_yr(h_km, A_m2, m_sat, lifetime_model=None, f107=None):
     """Crossing, re-entry, and derelict times in years at each altitude.
 
     TAU_CROSS_FRAG is Δh / |da/dt| and is the τ in N_crit and in the doubling time.
@@ -222,6 +263,7 @@ def timescales_yr(h_km, A_m2, m_sat, lifetime_model=None):
     TAU_DERELICT is that same integral with the derelict area-to-mass ratio.
     """
     model = LIFETIME_MODEL if lifetime_model is None else lifetime_model
+    solar = SOLAR_F107 if f107 is None else int(f107)
     h = np.asarray(h_km, float)
     if model == "legacy_fit":
         tau = debris_lifetime_yr(h)
@@ -235,39 +277,144 @@ def timescales_yr(h_km, A_m2, m_sat, lifetime_model=None):
     reentry = np.empty(flat.shape)
     derelict = np.empty(flat.shape)
     for i, hi in enumerate(flat):
-        per = float(_drag_seconds_per_unit_am(hi))
+        per = float(_drag_seconds_per_unit_am(hi, solar))
         cross[i] = (SHELL_KM * 1000.0) * per / (am_f * YEAR_S)
-        sec = _reentry_seconds_per_unit_am(hi)
+        sec = _reentry_seconds_per_unit_am(hi, solar)
         reentry[i] = sec / (am_f * YEAR_S)
         derelict[i] = sec / (am_d * YEAR_S)
     return cross.reshape(h.shape), reentry.reshape(h.shape), derelict.reshape(h.shape)
 
+# S5 Table 1. Altitude range (km) and maximum satellites. Inclination is recorded
+# for the sunlit-fraction calculation and is not used in the shell weights.
+# The six maxima sum to 1,198,120 against the 1,000,000 total, so the weights
+# are scaled proportionally, the method Lewis uses (S1, Methods).
+SPACEX_GROUPS = (
+    (550.0, 568.0, 26.0, 32.0, 99900.0),
+    (565.0, 585.0, 97.7, 97.7, 99980.0),
+    (686.0, 718.0, 30.0, 30.0, 249750.0),
+    (707.0, 744.0, 97.2, 97.2, 244860.0),
+    (946.0, 978.0, 30.0, 30.0, 249750.0),
+    (967.0, 1002.0, 99.4, 99.4, 253880.0),
+)
+SPACEX_GROUP_SUM = 1198120.0
+SPACEX_FILED_TOTAL = 1000000.0
+
+# J2000 mean obliquity of the ecliptic, 84381.448 arcsec (IAU 2006).
+# Not among S1-S17. The annual solar-declination sweep has no other scale.
+OBLIQUITY_DEG = 23.4392911
+
+
+def sunlit_fraction(h_km, inc_deg, n_year=48, n_raan=48, n_u=96):
+    """Annual-average sunlit fraction for a circular orbit.
+
+    Right ascension of the ascending node is uniform. Solar declination is
+    swept over a year on a circular ecliptic. Eclipse is the cylindrical
+    shadow already used by in_eclipse.
+    """
+    eps = np.radians(OBLIQUITY_DEG)
+    inc = np.radians(inc_deg)
+    r = R_E + h_km
+    lam = np.linspace(0.0, 2.0 * np.pi, n_year, endpoint=False)
+    om = np.linspace(0.0, 2.0 * np.pi, n_raan, endpoint=False)
+    u = np.linspace(0.0, 2.0 * np.pi, n_u, endpoint=False)
+    lam, om, u = np.meshgrid(lam, om, u, indexing="ij")
+    sx = np.cos(lam)
+    sy = np.cos(eps) * np.sin(lam)
+    sz = np.sin(eps) * np.sin(lam)
+    cu, su = np.cos(u), np.sin(u)
+    co, so = np.cos(om), np.sin(om)
+    ci, si = np.cos(inc), np.sin(inc)
+    x = r * (co * cu - so * su * ci)
+    y = r * (so * cu + co * su * ci)
+    z = r * su * si
+    along = x * sx + y * sy + z * sz
+    eclipse = (along < 0.0) & ((r * r - along * along) < R_E * R_E)
+    return float(1.0 - eclipse.mean())
+
+
+def group_sunlit(h0, h1, i0, i1):
+    """Groups at 97-99° are sun-synchronous. Dawn-dusk (sunlit = 1) is an assumption:
+    S8a says SSO, and the filing does not give the local time. The 26-32° groups
+    use the cylindrical-shadow average.
+    """
+    if i0 > 90.0:
+        return 1.0
+    incs = [i0] if i0 == i1 else [i0, i1]
+    altitudes = np.linspace(h0, h1, 9)
+    return float(np.mean([sunlit_fraction(h, inc) for h in altitudes for inc in incs]))
+
+
+def fleet_sunlit_fraction():
+    weighted = 0.0
+    total = 0.0
+    for h0, h1, i0, i1, n_max in SPACEX_GROUPS:
+        weighted += n_max * group_sunlit(h0, h1, i0, i1)
+        total += n_max
+    return weighted / total
+
+
+FLEET_SUNLIT = fleet_sunlit_fraction()
+
+
+def filing_weights(groups):
+    """Spread each group uniformly over its altitude range, split by shell overlap."""
+    w = np.zeros_like(H_C)
+    raw = sum(group[4] for group in groups)
+    for h0, h1, _i0, _i1, n_max in groups:
+        share = (n_max / raw) * (SPACEX_FILED_TOTAL / SPACEX_FILED_TOTAL)
+        width = h1 - h0
+        for i in range(len(EDGES) - 1):
+            overlap = min(EDGES[i + 1], h1) - max(EDGES[i], h0)
+            if overlap > 0.0:
+                w[i] += share * (overlap / width)
+    total = w.sum()
+    if total > 0.0:
+        w /= total
+    return w
+
+
 def distribution(preset, band=(500, 1000)):
     w = np.zeros_like(H_C)
-    if preset == "spacex":          # 20% in 500-550 km, 80% spread over 700-1000 km
-        lo = (H_C > 500) & (H_C < 550); hi = (H_C > 700) & (H_C < 1000)
-        w[lo] = 0.2 / lo.sum(); w[hi] = 0.8 / hi.sum()
+    if preset == "spacex":          # S5 Table 1, all six groups, scaled to 1,000,000
+        w = filing_weights(SPACEX_GROUPS)
+    elif preset == "spacex_initial":  # S5: begins with the shells below 600 km (groups 1-2)
+        w = filing_weights(SPACEX_GROUPS[:2])
     elif preset == "low":           # everything in 500-550 km
         w[(H_C > 500) & (H_C < 550)] = 1.0
     elif preset == "spread":        # uniform 500-2000 km
         m = (H_C > 500) & (H_C < 2000); w[m] = 1.0 / m.sum()
-    elif preset == "starlink":      # reference fleet: 500-600 km
-        m = (H_C > 500) & (H_C < 600); w[m] = 1.0 / m.sum()
+    elif preset == "starlink":      # S4 current SATCAT orbits, not the Dec 2025-May 2026 window average
+        w = STARLINK_COUNTS / STARLINK_COUNTS.sum()
     elif preset == "custom":        # uniform within [band[0], band[1]]
         m = (H_C > band[0]) & (H_C < band[1]); w[m] = 1.0 / m.sum()
     return w
 
+# S1 Lewis 2026 Eq. 1. Collision, kill, and dodge rates keep v = 10 km/s (NASA ODPO FAQ).
+V_LEWIS_M_S = 7500.0          # S1, "an assumed, conservative value"
+W_ECC = 1.1                   # S1, eccentricity factor (Lewis Methods)
+V_LEWIS_KM_YR = (V_LEWIS_M_S / 1000.0) * YEAR_S
+
+
+def sigma_f_km2(A_m2, m_sat):
+    """Lewis collision cross-section, km^2. A_i is the mean projected area A/2; A_f is the fragment sphere."""
+    A_i = A_m2 / 2.0
+    d_f = fragment_properties(m_sat)[1]
+    A_f = np.pi * d_f ** 2 / 4.0
+    return (np.sqrt(A_i) + np.sqrt(A_f)) ** 2 / 1e6
+
+
 def shell_rates(N_i, A_m2, m_sat, L_yr, s, f_disp, f_vuln, t_yr, F_frag, coord, sigma_screen_km2,
-                lifetime_model=None):
+                lifetime_model=None, f107=None):
     sig_d = A_m2 / 2.0 / 1e6          # mean projected area vs small debris, km^2
     sig_ss = 2.0 * A_m2 / 1e6         # pair cross-section between two such satellites, km^2
     kills = N_i * N_SMALL * sig_d * V_KM_YR * f_vuln                       # /yr, undodgeable
     cams = N_i * (N_BIG + coord * N_i / V_SH) * (sigma_screen_km2 + sig_ss) * V_KM_YR  # /yr
     inflow = f_disp * N_i / L_yr + kills                                   # new derelicts /yr
     # N_crit uses the fragment shell-crossing time. Derelicts use their own re-entry time.
-    tau_cross, tau_reentry, tau_derelict = timescales_yr(H_C, A_m2, m_sat, lifetime_model)
+    tau_cross, tau_reentry, tau_derelict = timescales_yr(H_C, A_m2, m_sat, lifetime_model, f107)
     D = inflow * tau_derelict * (1.0 - np.exp(-t_yr / tau_derelict))       # derelicts after t_yr
-    N_crit = V_SH / (F_frag * sig_d * V_KM_YR * tau_cross)                 # Kessler R0 = 1 threshold
+    # N_0 is the fragment count F_frag (S1, the source of 112 fragments per breakup).
+    N_crit = V_SH / (F_frag * W_ECC * sigma_f_km2(A_m2, m_sat) * V_LEWIS_KM_YR * tau_cross)
     N_eff = (1.0 - s) * N_i + D
     R0 = N_eff / N_crit
     coll_active = (N_i * N_BIG * sig_d * V_KM_YR * (1 - s)
@@ -279,9 +426,13 @@ def shell_rates(N_i, A_m2, m_sat, L_yr, s, f_disp, f_vuln, t_yr, F_frag, coord, 
                 tau_cross=tau_cross, tau_reentry=tau_reentry, tau_derelict=tau_derelict)
 
 # Calibrate the conjunction-screening cross-section so that "Starlink today"
-# reproduces SpaceX's reported 207,152 maneuvers in Dec 2025 - May 2026.
-STARLINK_N = 9000.0
-STARLINK_A = 116.0            # m^2, approx. V2-mini array area
+# reproduces the 65,137 + 142,015 = 207,152 maneuvers in the S9 report,
+# 1 Dec 2025 through 31 May 2026.
+# STARLINK_N is the mean daily in-orbit count from the same SATCAT download (S4).
+STARLINK_N = float(_DEBRIS["starlink_mean_in_orbit"])
+# S11: V2 Mini total surface area, 1,248 square feet = 116 m^2. Not the array area.
+STARLINK_A = 116.0
+STARLINK_M = 800.0            # kg, S11
 STARLINK_CAM_PER_MONTH = 207152.0 / 6.0
 
 def calibrate_sigma_screen():
@@ -291,14 +442,20 @@ def calibrate_sigma_screen():
 
 SIGMA_SCREEN = calibrate_sigma_screen()
 
-SPACEX_P_SAT = 120e3          # W, average compute per AI satellite
-SPACEX_A_SAT = 800.0          # m^2 (SpaceX-stated size, as used by Lewis 2026)
-SPACEX_M_SAT = 3000.0         # kg
+SPACEX_P_SAT = 120e3          # W average (S8a, S8b). Peak is 150 kW. Starmind still listed 120/150 when checked Nov 2026.
+SPACEX_A_SAT = 800.0          # m^2 total area, S5 Table 2 (also 100 m^2 bus and radiator)
+SPACEX_M_SAT = 3000.0         # kg, S5 Table 2
+SPACEX_SPAN_M = 70.0          # m wingspan, S8a and S8b. Height is 20 m.
 
 def kessler(rate_W_per_yr=1e9, L_yr=5.0, P_sat=SPACEX_P_SAT, preset="spacex", band=(500, 1000),
-            s=0.99, f_disp=0.01, f_vuln=0.10, t_yr=10.0, F_frag=112.0, coord=1.0,
-            usd_per_W_compute=30.0, usd_per_kg=1000.0, fleet_override=None, lifetime_model=None):
-    if fleet_override:                      # e.g. Starlink today: dict(N=9000, A=116, m=800)
+            s=0.99,       # S1: α = 0.01 with ε = 1, which Lewis calls optimistic
+            f_disp=0.01,  # S1: η = 0.01. S17: planned disposal success above 99%
+            f_vuln=0.10,  # S2 p. 25: FRACLETHAL = 10%
+            t_yr=10.0, F_frag=112.0,  # S1 fragment count, N_0 in Eq. 1
+            coord=1.0,
+            usd_per_W_compute=30.0, usd_per_kg=1000.0, fleet_override=None, lifetime_model=None,
+            f107=None):
+    if fleet_override:                      # e.g. Starlink today: dict(N=STARLINK_N, A=116, m=800)
         N, A, m = fleet_override["N"], fleet_override["A"], fleet_override["m"]
         P = 0.0
     else:
@@ -307,7 +464,7 @@ def kessler(rate_W_per_yr=1e9, L_yr=5.0, P_sat=SPACEX_P_SAT, preset="spacex", ba
         m = SPACEX_M_SAT * P_sat / SPACEX_P_SAT
         P = P_sat
     N_i = N * distribution(preset, band)
-    r = shell_rates(N_i, A, m, L_yr, s, f_disp, f_vuln, t_yr, F_frag, coord, SIGMA_SCREEN, lifetime_model)
+    r = shell_rates(N_i, A, m, L_yr, s, f_disp, f_vuln, t_yr, F_frag, coord, SIGMA_SCREEN, lifetime_model, f107)
     occ = N_i > 0
     cost_sat = P * usd_per_W_compute + m * usd_per_kg
     # Linear-regime check: the rate equations assume each satellite is hit/collides
@@ -318,7 +475,7 @@ def kessler(rate_W_per_yr=1e9, L_yr=5.0, P_sat=SPACEX_P_SAT, preset="spacex", ba
     worst_per_sat = float(max(kill_per_sat.max(), coll_per_sat.max()))
     frag10 = float(r["coll_total"].sum() * F_frag)
     return dict(
-        N=N, A_sat=A, m_sat=m, span_m=70.0 * np.sqrt(A / SPACEX_A_SAT),
+        N=N, A_sat=A, m_sat=m, span_m=SPACEX_SPAN_M * np.sqrt(A / SPACEX_A_SAT),
         launches_per_yr=N / L_yr,
         cam_per_month=float(r["cams"].sum() / 12.0),
         cam_ratio_vs_starlink=float(r["cams"].sum() / 12.0 / STARLINK_CAM_PER_MONTH),
@@ -352,7 +509,7 @@ if __name__ == "__main__":
         "terminator_faceA_zenith_500": radiator(500, [0, 1, 0], [0, 1, 0]),
         "noon_edge_on_500": radiator(500, [1, 0, 0], [0, 1, 0]),
         "dawn_dusk_edge_on_2000": radiator(2000, [0, 1, 0], [0, 0, 1]),
-        "dawn_dusk_edge_on_500_whitepaint": radiator(500, [0, 1, 0], [0, 0, 1], alpha=0.2, eps=0.9),
+        "dawn_dusk_edge_on_500_whitepaint": radiator(500, [0, 1, 0], [0, 0, 1], alpha=AZ93_ALPHA, eps=AZ93_EPS),
     }
     fx["cmb_flux"] = SIGMA * T_CMB ** 4
     fx["thermal"] = {
@@ -372,8 +529,9 @@ if __name__ == "__main__":
     m_f, d_f, rho_f, am_f = fragment_properties(SPACEX_M_SAT)
     fx["fragment_3000kg"] = {"m_f_kg": float(m_f), "d_m": float(d_f), "rho_kg_m3": float(rho_f), "am_m2_per_kg": float(am_f)}
     fx["kessler"] = {
-        "starlink_today": kessler(fleet_override=dict(N=9000, A=116, m=800), preset="starlink", P_sat=1),
-        "starlink_slider": kessler(rate_W_per_yr=(9000 * 116 * 150) / 5.0, P_sat=116 * (120e3 / 800.0), preset="starlink"),
+        "starlink_today": kessler(fleet_override=dict(N=STARLINK_N, A=STARLINK_A, m=STARLINK_M), preset="starlink", P_sat=1),
+        "starlink_slider": kessler(rate_W_per_yr=(STARLINK_N * STARLINK_A * (SPACEX_P_SAT / SPACEX_A_SAT)) / 5.0,
+                                   P_sat=STARLINK_A * (SPACEX_P_SAT / SPACEX_A_SAT), preset="starlink"),
         "1GW_spacex": kessler(1e9),
         "3GW_low": kessler(3e9, preset="low"),
         "10GW_spacex": kessler(10e9),

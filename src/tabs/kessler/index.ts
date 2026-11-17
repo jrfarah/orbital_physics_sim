@@ -16,21 +16,26 @@ import {
   cascadeTimescale,
   kessler,
   kesslerShellRates,
+  SPACEX_A_SAT,
+  SPACEX_P_SAT,
+  STARLINK_A,
+  STARLINK_N,
   type KesslerInput,
   type KesslerResult,
   type Preset,
+  type SolarF107,
 } from '../../physics/kessler';
 import { createLifetimeGauge, r0Legend, r0Style } from './gauges';
 import { createKesslerScene } from './scene';
 
-const STARLINK_RATE = (9000 * 116 * 150) / 5;
-const W_PER_M2 = 120000 / 800;
+const W_PER_M2 = SPACEX_P_SAT / SPACEX_A_SAT;
+const STARLINK_RATE = (STARLINK_N * STARLINK_A * W_PER_M2) / 5;
 const RATE_SNAPS = [
   { label: 'Starlink today', watts: STARLINK_RATE },
   { label: '1 GW', watts: 1e9 },
   { label: '100 GW', watts: 1e11 },
   { label: '500 GW', watts: 5e11 },
-  { label: '1 TW', watts: 1e12 },
+  { label: '1 TW, illustrative', watts: 1e12 },
 ];
 const DODGE = [0, 50, 90, 95, 99, 99.5, 99.9, 99.95, 99.99, 99.999];
 const COORD = [1, 0.3, 0.1, 0.03, 0.01];
@@ -51,6 +56,7 @@ interface KesslerState {
   usdPerKg: number;
   debris: boolean;
   paused: boolean;
+  solar: SolarF107;
 }
 
 function defaults(): KesslerState {
@@ -70,6 +76,7 @@ function defaults(): KesslerState {
     usdPerKg: 1000,
     debris: true,
     paused: reducedMotion(),
+    solar: 130,
   };
 }
 
@@ -294,7 +301,7 @@ export function createKesslerTab(summary: (text: string) => void) {
     scale: 'log',
     format: sizeChip,
     marks: [
-      { value: 116, label: 'Starlink' },
+      { value: 116, label: 'Starlink total area' },
       { value: 800, label: 'SpaceX AI' },
     ],
     onInput: (v) => {
@@ -327,7 +334,8 @@ export function createKesslerTab(summary: (text: string) => void) {
     id: 'k-where',
     label: 'Where?',
     options: [
-      { value: 'spacex', label: 'SpaceX filing' },
+      { value: 'spacex', label: 'SpaceX FCC filing (May 2026)' },
+      { value: 'spacex_initial', label: 'Below 600 km first' },
       { value: 'low', label: 'All low (500-550 km)' },
       { value: 'spread', label: 'Spread out (500-2000 km)' },
       { value: 'custom', label: 'Custom band' },
@@ -356,6 +364,7 @@ export function createKesslerTab(summary: (text: string) => void) {
   const dodge = createSlider({
     id: 'k-dodge',
     label: 'Dodge success',
+    sublabel: '99% is Lewis’s optimistic case: a 100× risk reduction if every manoeuvre succeeds.',
     min: 0,
     max: 100,
     step: 1,
@@ -371,7 +380,7 @@ export function createKesslerTab(summary: (text: string) => void) {
   const disp = createSlider({
     id: 'k-disp',
     label: 'Failed disposals at end of life',
-    sublabel: "Starlink's in-orbit failure rate so far is about 1.3% (McDowell, cited in Lewis 2026)",
+    sublabel: 'Lewis uses 1%, in line with McDowell’s recorded Starlink rate of about 1.3%. SpaceX’s filing plans a disposal success above 99%.',
     min: 0.1,
     max: 10,
     step: 0.1,
@@ -385,6 +394,7 @@ export function createKesslerTab(summary: (text: string) => void) {
   const vuln = createSlider({
     id: 'k-vuln',
     label: 'Fraction of a satellite where a 1-10 cm hit is fatal',
+    sublabel: 'NASA’s own figure is 10%, and only if the strike hits a vital subsystem.',
     min: 1,
     max: 50,
     step: 1,
@@ -421,6 +431,19 @@ export function createKesslerTab(summary: (text: string) => void) {
     format: (v) => fmtSig(v, 2),
     onInput: (v) => {
       state.coord = v;
+      wrapped();
+    },
+  });
+  const solar = createSegmented<'130' | '100'>({
+    id: 'k-solar',
+    label: 'Solar activity, F10.7',
+    options: [
+      { value: '130', label: '130, average' },
+      { value: '100', label: '100, low' },
+    ],
+    value: '130',
+    onChange: (value) => {
+      state.solar = value === '100' ? 100 : 130;
       wrapped();
     },
   });
@@ -512,7 +535,7 @@ export function createKesslerTab(summary: (text: string) => void) {
     el('h2', 'section-title', 'Avoidance'),
     dodge.element,
     disp.element,
-    createCollapsible('Advanced', [life.element, debrisToggle.element, vuln.element, frag.element, coord.element, years.element, usdW.element, usdKg.element]),
+    createCollapsible('Advanced', [life.element, solar.element, debrisToggle.element, vuln.element, frag.element, coord.element, years.element, usdW.element, usdKg.element]),
     el('div', 'footer-row', ''),
   );
   const footer = controls.querySelector('.footer-row') as HTMLElement;
@@ -542,6 +565,7 @@ export function createKesslerTab(summary: (text: string) => void) {
     usdW.setValue(state.usdPerW, true);
     usdKg.setValue(state.usdPerKg, true);
     preset.setValue(state.preset, true);
+    solar.setValue(state.solar === 100 ? '100' : '130', true);
     band.setValue(state.band, true);
     debrisToggle.setValue(state.debris, true);
     band.element.hidden = state.preset !== 'custom';
@@ -586,6 +610,7 @@ export function createKesslerTab(summary: (text: string) => void) {
       coord: state.coord,
       usdPerW: state.usdPerW,
       usdPerKg: state.usdPerKg,
+      solarF107: state.solar,
     };
   }
 
@@ -635,8 +660,8 @@ export function createKesslerTab(summary: (text: string) => void) {
     hitsSub.textContent = `${fmtSig(pct)}% per satellite per year`;
     deadNum.set(fmtBig(result.derelicts));
     deadSub.textContent = `after ${Math.round(state.tYr)} years`;
-    fragBody.textContent = `${fmtBig(result.fragments_per_yr)} trackable fragments (≥10 cm) and ${fmtBig(result.small_fragments_per_yr)} untracked fragments (1-10 cm). Today's entire untracked population: ~1.2 million.`;
-    fragWarn.hidden = result.small_fragments_per_yr <= 1.2e6;
+    fragBody.textContent = `${fmtBig(result.fragments_per_yr)} trackable fragments (≥10 cm) and ${fmtBig(result.small_fragments_per_yr)} untracked fragments (1-10 cm). Today's entire untracked population: ~1.5 million.`;
+    fragWarn.hidden = result.small_fragments_per_yr <= 1.5e6;
     const top = result.shells.reduce((a, b) => (a.h > b.h ? a : b), result.shells[0]);
     if (top) gauge.set(top.tau, top.h);
     latency.textContent = `Round-trip light time to the highest shell: ${fmtSig(result.rtt_ms_max)} ms (coast-to-coast fiber is ~60-70 ms). Altitude doesn't hurt latency much; it hurts cleanup.`;
@@ -674,6 +699,7 @@ export function createKesslerTab(summary: (text: string) => void) {
       if (state.tYr !== 10) params.set('t', String(state.tYr));
       if (state.fFrag !== 112) params.set('frag', String(Math.round(state.fFrag)));
       if (state.coord !== 1) params.set('coord', String(state.coord));
+      if (state.solar !== 130) params.set('f107', String(state.solar));
       const qs = params.toString();
       const next = `#/kessler${qs ? `?${qs}` : ''}`;
       if (location.hash !== next) history.replaceState(null, '', next);
@@ -710,9 +736,18 @@ export function createKesslerTab(summary: (text: string) => void) {
       if (params.has('area')) next.area = Number(params.get('area'));
       else if (params.has('psat')) next.area = Number(params.get('psat')) / W_PER_M2;
       const presetName = params.get('preset');
-      if (presetName === 'low' || presetName === 'spread' || presetName === 'custom' || presetName === 'starlink' || presetName === 'spacex') {
+      if (
+        presetName === 'low' ||
+        presetName === 'spread' ||
+        presetName === 'custom' ||
+        presetName === 'starlink' ||
+        presetName === 'spacex' ||
+        presetName === 'spacex_initial'
+      ) {
         next.preset = presetName;
       }
+      const solar = Number(params.get('f107'));
+      if (solar === 100 || solar === 130) next.solar = solar;
       const bandRaw = params.get('band');
       if (bandRaw && bandRaw.includes('-')) {
         const [a, b] = bandRaw.split('-').map(Number);

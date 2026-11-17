@@ -3,7 +3,9 @@
  * The shell grid is 36 shells: edges at 200, 250, …, 2000 km.
  * SIGMA_SCREEN is computed once at module load by calibrateSigmaScreen().
  */
-import densityTable from '../../reference/density_msis2_f130_ap7.json';
+import density130 from '../../reference/density_msis2_f130_ap7.json';
+import density100 from '../../reference/density_msis2_f100_ap5.json';
+import debrisProfile from '../../reference/debris_profile_satcat_2026-11-17.json';
 import { C_KM_S, R_E, V_KM_YR, YEAR_S } from './constants';
 
 export const EDGES: number[] = [];
@@ -19,27 +21,18 @@ for (let i = 0; i < EDGES.length - 1; i++) {
   V_SH.push((4 / 3) * Math.PI * ((R_E + top) ** 3 - (R_E + bot) ** 3));
 }
 
-function g(h: number, mu: number, s: number): number {
-  return Math.exp(-0.5 * ((h - mu) / s) ** 2);
-}
-
-// Spatial-density SHAPE: main peak 750-1000 km (NASA ODPO FAQ), secondary ~1400-1500 km
-// (MASTER, e.g. SDC9 sub-10 cm paper), small bump near 550 km, low floor.
-export const SHAPE: number[] = H_C.map(
-  (h) => 0.12 * g(h, 550, 60) + 1.0 * g(h, 850, 110) + 0.35 * g(h, 1450, 130) + 0.03,
-);
-
-/** objects per km^3 in each shell, normalized so sum(n*V) = N_total. */
-export function densityProfile(nTotal: number): number[] {
-  let denom = 0;
-  for (let i = 0; i < SHAPE.length; i++) denom += SHAPE[i] * V_SH[i];
-  return SHAPE.map((s) => (nTotal * s) / denom);
-}
-
-export const N_BIG_LEO = 33_000; // >=10 cm non-operational objects in LEO (assumed ~75% of ESA's ~45k)
-export const N_SMALL_LEO = 900_000; // 1-10 cm objects in LEO (assumed ~75% of ESA MASTER-8 1.2 million)
-export const N_BIG = densityProfile(N_BIG_LEO);
-export const N_SMALL = densityProfile(N_SMALL_LEO);
+// S4 CelesTrak SATCAT, built by reference/build_debris_profile.py.
+export const NON_ACTIVE_COUNTS = debrisProfile.non_active;
+export const STARLINK_COUNTS = debrisProfile.starlink;
+// Tracked non-active objects per km^3. These are what satellites dodge.
+export const N_BIG = NON_ACTIVE_COUNTS.map((count, i) => count / V_SH[i]);
+// S3 MASTER-8 02/2026. R_small = 1.5e6 / (68450 − 11300) = 26.2.
+// Small debris follows the tracked altitude profile, as in NASA OTPS (S2, p. 15).
+export const ESA_GT_10CM = 68450;
+export const ESA_ACTIVE_PAYLOADS = 11300;
+export const ESA_1_TO_10CM = 1.5e6;
+export const R_SMALL = ESA_1_TO_10CM / (ESA_GT_10CM - ESA_ACTIVE_PAYLOADS);
+export const N_SMALL = N_BIG.map((n) => n * R_SMALL);
 
 /** Legacy hand fit: ~5 yr at 550 km, ~100 yr at 800 km, capped at 10,000 yr. */
 export function debrisLifetimeYr(hKm: number): number {
@@ -63,24 +56,32 @@ const FRAG_MASS_DIVISOR = 1250;
 const FRAG_DENSITY_COEFF = 92.937;
 const FRAG_DENSITY_EXP = -0.74;
 
-const ALT_KM = densityTable.alt_km;
-const LOG_RHO = densityTable.rho_kg_m3.map((rho) => Math.log(rho));
+// S1 default is F10.7 = 130, Lewis's average solar activity, with Ap = 7.
+// The other position is F10.7 = 100 with Ap = 5 (S5, Table 2).
+export type SolarF107 = 130 | 100;
+export const SOLAR_F107: SolarF107 = 130;
+const DENSITY: Record<SolarF107, { alt: number[]; logRho: number[] }> = {
+  130: { alt: density130.alt_km, logRho: density130.rho_kg_m3.map((rho) => Math.log(rho)) },
+  100: { alt: density100.alt_km, logRho: density100.rho_kg_m3.map((rho) => Math.log(rho)) },
+};
 
 /** Global-mean NRLMSIS 2.0 density, kg/m^3. log(ρ) is linear in altitude. */
-export function msisDensity(hKm: number): number {
-  const n = ALT_KM.length;
-  if (hKm <= ALT_KM[0]) return Math.exp(LOG_RHO[0]);
-  if (hKm >= ALT_KM[n - 1]) return Math.exp(LOG_RHO[n - 1]);
+export function msisDensity(hKm: number, f107: SolarF107 = SOLAR_F107): number {
+  const alt = DENSITY[f107].alt;
+  const logRho = DENSITY[f107].logRho;
+  const n = alt.length;
+  if (hKm <= alt[0]) return Math.exp(logRho[0]);
+  if (hKm >= alt[n - 1]) return Math.exp(logRho[n - 1]);
   let lo = 0;
   let hi = n - 1;
   while (hi - lo > 1) {
     const mid = (lo + hi) >> 1;
-    if (ALT_KM[mid] <= hKm) lo = mid;
+    if (alt[mid] <= hKm) lo = mid;
     else hi = mid;
   }
-  const span = ALT_KM[hi] - ALT_KM[lo];
-  const t = span === 0 ? 0 : (hKm - ALT_KM[lo]) / span;
-  return Math.exp(LOG_RHO[lo] + t * (LOG_RHO[hi] - LOG_RHO[lo]));
+  const span = alt[hi] - alt[lo];
+  const t = span === 0 ? 0 : (hKm - alt[lo]) / span;
+  return Math.exp(logRho[lo] + t * (logRho[hi] - logRho[lo]));
 }
 
 export interface FragmentProperties {
@@ -104,27 +105,31 @@ export function fragmentProperties(mSat: number): FragmentProperties {
   return { mF, dM, rho, am };
 }
 
-/** Mean projected area of a tumbling flat plate, the same A/2 used for sig_d. m^2/kg. */
+// S5 Table 2. SpaceX's own area-to-mass for this satellite: (800 m² / 2) / 3000 kg.
+export const SPACEX_DERELICT_AM = 0.1333;
+
+/** Mean projected area of a tumbling flat plate, m^2/kg. The 800 m², 3000 kg satellite uses S5; other fleets keep (A/2)/m. */
 export function derelictAreaToMass(areaM2: number, mSat: number): number {
+  if (areaM2 === SPACEX_A_SAT && mSat === SPACEX_M_SAT) return SPACEX_DERELICT_AM;
   return areaM2 / 2 / mSat;
 }
 
 /** Seconds per (m^2/kg) for |da/dt| at altitude h. Lewis 2026 Eq. 10 without A/m. */
-function dragSecondsPerUnitAm(hKm: number): number {
+function dragSecondsPerUnitAm(hKm: number, f107: SolarF107): number {
   const aM = (R_E + hKm) * 1000;
-  return 1 / (msisDensity(hKm) * C_D * Math.sqrt(GM * aM));
+  return 1 / (msisDensity(hKm, f107) * C_D * Math.sqrt(GM * aM));
 }
 
 /** Integral from 125 km to h of dh/|da/dt|, per unit A/m. Trapezoid on the 5 km table. */
-function reentrySecondsPerUnitAm(hKm: number): number {
+function reentrySecondsPerUnitAm(hKm: number, f107: SolarF107): number {
   if (hKm <= H_REENTRY_KM) return 0;
   const n = Math.round((hKm - H_REENTRY_KM) / 5);
   let acc = 0;
-  let prevF = dragSecondsPerUnitAm(H_REENTRY_KM);
+  let prevF = dragSecondsPerUnitAm(H_REENTRY_KM, f107);
   let prevX = H_REENTRY_KM * 1000;
   for (let i = 1; i <= n; i++) {
     const h = H_REENTRY_KM + 5 * i;
-    const f = dragSecondsPerUnitAm(h);
+    const f = dragSecondsPerUnitAm(h, f107);
     const x = h * 1000;
     acc += (f + prevF) * (x - prevX) * 0.5;
     prevF = f;
@@ -147,6 +152,7 @@ export function dragTimescalesYr(
   areaM2: number,
   massKg: number,
   model: LifetimeModel = LIFETIME_MODEL,
+  f107: SolarF107 = SOLAR_F107,
 ): DragTimescales {
   if (model === 'legacy_fit') {
     const tau = debrisLifetimeYr(hKm);
@@ -154,8 +160,8 @@ export function dragTimescalesYr(
   }
   const amF = fragmentProperties(massKg).am;
   const amD = derelictAreaToMass(areaM2, massKg);
-  const per = dragSecondsPerUnitAm(hKm);
-  const sec = reentrySecondsPerUnitAm(hKm);
+  const per = dragSecondsPerUnitAm(hKm, f107);
+  const sec = reentrySecondsPerUnitAm(hKm, f107);
   return {
     cross: (SHELL_KM * 1000 * per) / (amF * YEAR_S),
     reentry: sec / (amF * YEAR_S),
@@ -163,7 +169,100 @@ export function dragTimescalesYr(
   };
 }
 
-export type Preset = 'spacex' | 'low' | 'spread' | 'starlink' | 'custom';
+export type Preset = 'spacex' | 'spacex_initial' | 'low' | 'spread' | 'starlink' | 'custom';
+
+// S5 Table 1. [h0, h1, inc0, inc1, maximum satellites]. The six maxima sum to
+// 1,198,120 against the 1,000,000 total, so the weights are scaled proportionally (S1).
+export const SPACEX_GROUPS: ReadonlyArray<readonly [number, number, number, number, number]> = [
+  [550, 568, 26, 32, 99900],
+  [565, 585, 97.7, 97.7, 99980],
+  [686, 718, 30, 30, 249750],
+  [707, 744, 97.2, 97.2, 244860],
+  [946, 978, 30, 30, 249750],
+  [967, 1002, 99.4, 99.4, 253880],
+];
+
+// J2000 mean obliquity, 84381.448 arcsec (IAU 2006). Not in S1–S17; the declination sweep needs it.
+const OBLIQUITY_DEG = 23.4392911;
+
+/** Annual-average sunlit fraction. Uniform RAAN, solar declination swept over a year, cylindrical shadow. */
+export function sunlitFraction(hKm: number, incDeg: number, nYear = 48, nRaan = 48, nU = 96): number {
+  const eps = (OBLIQUITY_DEG * Math.PI) / 180;
+  const inc = (incDeg * Math.PI) / 180;
+  const r = R_E + hKm;
+  const ci = Math.cos(inc);
+  const si = Math.sin(inc);
+  let eclipse = 0;
+  let samples = 0;
+  for (let iy = 0; iy < nYear; iy++) {
+    const lam = (2 * Math.PI * iy) / nYear;
+    const sx = Math.cos(lam);
+    const sy = Math.cos(eps) * Math.sin(lam);
+    const sz = Math.sin(eps) * Math.sin(lam);
+    for (let ir = 0; ir < nRaan; ir++) {
+      const om = (2 * Math.PI * ir) / nRaan;
+      const co = Math.cos(om);
+      const so = Math.sin(om);
+      for (let iu = 0; iu < nU; iu++) {
+        const u = (2 * Math.PI * iu) / nU;
+        const cu = Math.cos(u);
+        const su = Math.sin(u);
+        const x = r * (co * cu - so * su * ci);
+        const y = r * (so * cu + co * su * ci);
+        const z = r * su * si;
+        const along = x * sx + y * sy + z * sz;
+        samples++;
+        if (along < 0 && r * r - along * along < R_E * R_E) eclipse++;
+      }
+    }
+  }
+  return 1 - eclipse / samples;
+}
+
+/** 97–99° groups are sun-synchronous. Dawn-dusk (sunlit = 1) is an assumption: S8a says SSO, the filing gives no local time. */
+export function groupSunlit(h0: number, h1: number, i0: number, i1: number): number {
+  if (i0 > 90) return 1;
+  const incs = i0 === i1 ? [i0] : [i0, i1];
+  let sum = 0;
+  let n = 0;
+  for (const inc of incs) {
+    for (let k = 0; k < 9; k++) {
+      const h = h0 + ((h1 - h0) * k) / 8;
+      sum += sunlitFraction(h, inc);
+      n++;
+    }
+  }
+  return sum / n;
+}
+
+/** Group-maximum-weighted sunlit fraction of the filed fleet. */
+export function fleetSunlitFraction(): number {
+  let weighted = 0;
+  let total = 0;
+  for (const [h0, h1, i0, i1, nMax] of SPACEX_GROUPS) {
+    weighted += nMax * groupSunlit(h0, h1, i0, i1);
+    total += nMax;
+  }
+  return weighted / total;
+}
+
+export const FLEET_SUNLIT = fleetSunlitFraction();
+
+function filingWeights(groups: ReadonlyArray<readonly [number, number, number, number, number]>): number[] {
+  const w = H_C.map(() => 0);
+  let raw = 0;
+  for (const group of groups) raw += group[4];
+  for (const [h0, h1, , , nMax] of groups) {
+    const share = nMax / raw;
+    const width = h1 - h0;
+    for (let i = 0; i < EDGES.length - 1; i++) {
+      const overlap = Math.min(EDGES[i + 1], h1) - Math.max(EDGES[i], h0);
+      if (overlap > 0) w[i] += share * (overlap / width);
+    }
+  }
+  const total = w.reduce((a, b) => a + b, 0);
+  return total > 0 ? w.map((v) => v / total) : w;
+}
 
 export function distribution(preset: Preset, band: [number, number] = [500, 1000]): number[] {
   const w = H_C.map(() => 0);
@@ -173,11 +272,10 @@ export function distribution(preset: Preset, band: [number, number] = [500, 1000
     return idx;
   };
   if (preset === 'spacex') {
-    // 20% in 500-550 km, 80% spread over 700-1000 km
-    const lo = mask((h) => h > 500 && h < 550);
-    const hi = mask((h) => h > 700 && h < 1000);
-    for (const i of lo) w[i] = 0.2 / lo.length;
-    for (const i of hi) w[i] = 0.8 / hi.length;
+    return filingWeights(SPACEX_GROUPS);
+  } else if (preset === 'spacex_initial') {
+    // S5: begins with the orbital shells at nominal altitudes below 600 km.
+    return filingWeights(SPACEX_GROUPS.slice(0, 2));
   } else if (preset === 'low') {
     // everything in 500-550 km
     for (const i of mask((h) => h > 500 && h < 550)) w[i] = 1;
@@ -186,9 +284,9 @@ export function distribution(preset: Preset, band: [number, number] = [500, 1000
     const m = mask((h) => h > 500 && h < 2000);
     for (const i of m) w[i] = 1 / m.length;
   } else if (preset === 'starlink') {
-    // reference fleet: 500-600 km
-    const m = mask((h) => h > 500 && h < 600);
-    for (const i of m) w[i] = 1 / m.length;
+    // S4 current SATCAT orbits, not the Dec 2025–May 2026 window average.
+    const total = STARLINK_COUNTS.reduce((a, b) => a + b, 0);
+    return STARLINK_COUNTS.map((count) => count / total);
   } else if (preset === 'custom') {
     // uniform within [band[0], band[1]]
     const m = mask((h) => h > band[0] && h < band[1]);
@@ -223,9 +321,17 @@ export function shellRates(
   coord: number,
   sigmaScreenKm2: number,
   lifetimeModel: LifetimeModel = LIFETIME_MODEL,
+  f107: SolarF107 = SOLAR_F107,
 ): ShellRates {
   const sigD = aM2 / 2 / 1e6; // mean projected area vs small debris, km^2
   const sigSs = (2 * aM2) / 1e6; // pair cross-section between two such satellites, km^2
+  // S1 Lewis Eq. 1. Collision, kill, and dodge rates keep v = 10 km/s (NASA ODPO FAQ).
+  const vLewisKmYr = (7500 / 1000) * YEAR_S; // 7500 m/s, "an assumed, conservative value"
+  const wEcc = 1.1; // S1 eccentricity factor
+  const dF = fragmentProperties(mSat).dM;
+  const aI = aM2 / 2;
+  const aF = (Math.PI * dF * dF) / 4;
+  const sigmaFKm2 = (Math.sqrt(aI) + Math.sqrt(aF)) ** 2 / 1e6;
   const kills: number[] = [];
   const cams: number[] = [];
   const D: number[] = [];
@@ -242,9 +348,10 @@ export function shellRates(
     const c = Ni * (N_BIG[i] + (coord * Ni) / V_SH[i]) * (sigmaScreenKm2 + sigSs) * V_KM_YR; // /yr
     const inflow = (fDisp * Ni) / lYr + k; // new derelicts /yr
     // N_crit uses the fragment shell-crossing time. Derelicts use their own re-entry time.
-    const times = dragTimescalesYr(H_C[i], aM2, mSat, lifetimeModel);
+    const times = dragTimescalesYr(H_C[i], aM2, mSat, lifetimeModel, f107);
     const d = inflow * times.derelict * (1 - Math.exp(-tYr / times.derelict)); // derelicts after t_yr
-    const nc = V_SH[i] / (fFrag * sigD * V_KM_YR * times.cross); // Kessler R0 = 1 threshold
+    // N_0 is the fragment count F_frag (S1). 
+    const nc = V_SH[i] / (fFrag * wEcc * sigmaFKm2 * vLewisKmYr * times.cross);
     const nEff = (1 - s) * Ni + d;
     const r = nEff / nc;
     const ca =
@@ -277,10 +384,11 @@ export function shellRates(
   };
 }
 
-// Calibrate the conjunction-screening cross-section so that "Starlink today"
-// reproduces SpaceX's reported 207,152 maneuvers in Dec 2025 - May 2026.
-export const STARLINK_N = 9000;
-export const STARLINK_A = 116; // m^2, approx. V2-mini array area
+// S9: 65,137 + 142,015 = 207,152 maneuvers, 1 Dec 2025 through 31 May 2026.
+// STARLINK_N is the mean daily in-orbit payload count from the same SATCAT download (S4).
+export const STARLINK_N = debrisProfile.starlink_mean_in_orbit;
+export const STARLINK_A = 116; // m^2, V2 Mini total surface area (S11), not the array area
+export const STARLINK_M = 800; // kg, S11
 export const STARLINK_CAM_PER_MONTH = 207152 / 6;
 
 export function calibrateSigmaScreen(): number {
@@ -293,9 +401,10 @@ export function calibrateSigmaScreen(): number {
 
 export const SIGMA_SCREEN = calibrateSigmaScreen();
 
-export const SPACEX_P_SAT = 120e3; // W, average compute per AI satellite
-export const SPACEX_A_SAT = 800; // m^2 (SpaceX-stated size, as used by Lewis 2026)
-export const SPACEX_M_SAT = 3000; // kg
+export const SPACEX_P_SAT = 120e3; // W average (S8a, S8b). Peak is 150 kW.
+export const SPACEX_A_SAT = 800; // m^2 total area, S5 Table 2
+export const SPACEX_M_SAT = 3000; // kg, S5 Table 2
+export const SPACEX_SPAN_M = 70; // m wingspan, S8a and S8b
 
 export interface FleetOverride {
   N: number;
@@ -319,6 +428,7 @@ export interface KesslerInput {
   usdPerKg?: number;
   fleetOverride?: FleetOverride | null;
   lifetimeModel?: LifetimeModel;
+  solarF107?: SolarF107;
 }
 
 export interface ShellRow {
@@ -386,6 +496,7 @@ export function kesslerShellRates(input: KesslerInput = {}): { kills: number[]; 
   const coord = input.coord ?? 1;
   const fleet = input.fleetOverride ?? null;
   const lifetimeModel = input.lifetimeModel ?? LIFETIME_MODEL;
+  const f107 = input.solarF107 ?? SOLAR_F107;
   let N: number;
   let A: number;
   let m: number;
@@ -399,7 +510,7 @@ export function kesslerShellRates(input: KesslerInput = {}): { kills: number[]; 
     m = (SPACEX_M_SAT * pSatIn) / SPACEX_P_SAT;
   }
   const nI = distribution(preset, band).map((wi) => N * wi);
-  const rows = shellRates(nI, A, m, lYr, s, fDisp, fVuln, tYr, fFrag, coord, SIGMA_SCREEN, lifetimeModel);
+  const rows = shellRates(nI, A, m, lYr, s, fDisp, fVuln, tYr, fFrag, coord, SIGMA_SCREEN, lifetimeModel, f107);
   return { kills: rows.kills, coll_total: rows.coll_total, coll_active: rows.coll_active };
 }
 
@@ -419,6 +530,7 @@ export function kessler(input: KesslerInput = {}): KesslerResult {
   const usdPerKg = input.usdPerKg ?? 1000;
   const fleet = input.fleetOverride ?? null;
   const lifetimeModel = input.lifetimeModel ?? LIFETIME_MODEL;
+  const f107 = input.solarF107 ?? SOLAR_F107;
 
   let N: number;
   let A: number;
@@ -437,7 +549,7 @@ export function kessler(input: KesslerInput = {}): KesslerResult {
   }
   const w = distribution(preset, band);
   const nI = w.map((wi) => N * wi);
-  const r = shellRates(nI, A, m, lYr, s, fDisp, fVuln, tYr, fFrag, coord, SIGMA_SCREEN, lifetimeModel);
+  const r = shellRates(nI, A, m, lYr, s, fDisp, fVuln, tYr, fFrag, coord, SIGMA_SCREEN, lifetimeModel, f107);
 
   let camSum = 0;
   let killSum = 0;
@@ -490,7 +602,7 @@ export function kessler(input: KesslerInput = {}): KesslerResult {
     N,
     A_sat: A,
     m_sat: m,
-    span_m: 70 * Math.sqrt(A / SPACEX_A_SAT),
+    span_m: SPACEX_SPAN_M * Math.sqrt(A / SPACEX_A_SAT),
     launches_per_yr: N / lYr,
     cam_per_month: camSum / 12,
     cam_ratio_vs_starlink: camSum / 12 / STARLINK_CAM_PER_MONTH,

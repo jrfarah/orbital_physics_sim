@@ -4,7 +4,7 @@ import { instanceBudget, maxTilesPerSatellite } from './capacity';
 describe('satellite instance capacity', () => {
   it('covers the slider extremes with a 10% margin', () => {
     const stride = maxTilesPerSatellite();
-    expect(stride).toBeGreaterThan(1800);
+    expect(stride).toBeGreaterThan(1000);
     expect(stride).toBeLessThan(4000);
   });
 

@@ -179,7 +179,7 @@ export function faceSeesSun(hKm: number, rHat: Vec3, sHat: Vec3 = S_HAT): boolea
 export const COATINGS = {
   blackbody: { alpha: 1, eps: 1, label: 'Ideal blackbody (absorbs α = 1, emits ε = 1)' },
   black: { alpha: 0.95, eps: 0.9, label: 'Black paint (α = 0.95, ε = 0.90)' },
-  white: { alpha: 0.2, eps: 0.9, label: 'White radiator paint (α = 0.20, ε = 0.90)' },
+  white: { alpha: 0.15, eps: 0.91, label: 'AZ-93 white paint (α = 0.15, ε = 0.91)' },
 } as const;
 
 export type CoatingId = keyof typeof COATINGS;

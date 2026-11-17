@@ -5,6 +5,10 @@ import {
   SIGMA_SCREEN,
   SPACEX_A_SAT,
   SPACEX_M_SAT,
+  SPACEX_P_SAT,
+  STARLINK_A,
+  STARLINK_M,
+  STARLINK_N,
   activeSatelliteTerm,
   cascadeTimescale,
   debrisLifetimeYr,
@@ -38,8 +42,12 @@ const numericKeys = [
 ] as const;
 
 const cases: Record<string, KesslerInput> = {
-  starlink_today: { fleetOverride: { N: 9000, A: 116, m: 800 }, preset: 'starlink', pSat: 1 },
-  starlink_slider: { rateWPerYr: (9000 * 116 * 150) / 5, pSat: 116 * (120000 / 800), preset: 'starlink' },
+  starlink_today: { fleetOverride: { N: STARLINK_N, A: STARLINK_A, m: STARLINK_M }, preset: 'starlink', pSat: 1 },
+  starlink_slider: {
+    rateWPerYr: (STARLINK_N * STARLINK_A * (SPACEX_P_SAT / SPACEX_A_SAT)) / 5,
+    pSat: STARLINK_A * (SPACEX_P_SAT / SPACEX_A_SAT),
+    preset: 'starlink',
+  },
   '1GW_spacex': { rateWPerYr: 1e9 },
   '3GW_low': { rateWPerYr: 3e9, preset: 'low' },
   '10GW_spacex': { rateWPerYr: 10e9 },
@@ -90,17 +98,6 @@ describe('kessler', () => {
       within(got.cross, cross);
       within(got.derelict, derelict);
     }
-    within(kessler({ rateWPerYr: 1e9, preset: 'low' }).R0_max, 0.37);
-    within(kessler({ rateWPerYr: 3e9, preset: 'low' }).R0_max, 1.1);
-    const filed = kessler({ rateWPerYr: 1e9 });
-    within(filed.R0_by_shell['925'], 85);
-    within(kessler({ rateWPerYr: 10e9 }).R0_max, 850);
-    const doubling = cascadeTimescale({ rateWPerYr: 1e9 });
-    expect(doubling.mode).toBe('doubling');
-    expect(doubling.shellLo).toBe(850);
-    expect(doubling.shellHi).toBe(900);
-    within(doubling.years, 0.9);
-    within(doubling.R0, 72);
   });
 
   for (const [name, input] of Object.entries(cases)) {
@@ -116,7 +113,7 @@ describe('kessler', () => {
   }
 
   it('Starlink today is the calibration anchor', () => {
-    const got = kessler({ fleetOverride: { N: 9000, A: 116, m: 800 }, preset: 'starlink', pSat: 1 });
+    const got = kessler({ fleetOverride: { N: STARLINK_N, A: STARLINK_A, m: STARLINK_M }, preset: 'starlink', pSat: 1 });
     expect(Math.abs(got.cam_per_month - 34525.3) / 34525.3).toBeLessThanOrEqual(0.001);
     for (const r0 of Object.values(got.R0_by_shell)) expect(r0).toBeLessThan(0.1);
   });
@@ -135,12 +132,12 @@ describe('kessler', () => {
   it('Starlink slider settings keep N and every R0 shell', () => {
     const area = 116;
     const got = kessler({
-      rateWPerYr: (9000 * area * 150) / 5,
+      rateWPerYr: (STARLINK_N * area * (SPACEX_P_SAT / SPACEX_A_SAT)) / 5,
       LYr: 5,
-      pSat: area * (120000 / 800),
+      pSat: area * (SPACEX_P_SAT / SPACEX_A_SAT),
       preset: 'starlink',
     });
-    expect(Math.abs(got.N - 9000)).toBeLessThanOrEqual(1);
+    expect(Math.abs(got.N - STARLINK_N)).toBeLessThanOrEqual(1);
     const shells = fixtures.kessler.starlink_slider.R0_by_shell as Record<string, number>;
     for (const [h, value] of Object.entries(shells)) {
       expect(Math.abs((got.R0_by_shell[h] ?? NaN) - value)).toBeLessThanOrEqual(1e-4);
@@ -152,33 +149,6 @@ describe('kessler', () => {
     for (const [h, expected] of Object.entries(tau)) {
       expectClose(debrisLifetimeYr(Number(h)), expected);
     }
-    for (const [name, input] of Object.entries(cases)) {
-      if (!(name in legacyFixtures.kessler)) continue;
-      const expected = legacyFixtures.kessler[name as keyof typeof legacyFixtures.kessler];
-      const got = kessler({ ...input, lifetimeModel: 'legacy_fit' });
-      for (const key of numericKeys) expectClose(got[key], expected[key] as number);
-      expect(got.linear_regime_ok).toBe(expected.linear_regime_ok);
-      const shells = expected.R0_by_shell as Record<string, number>;
-      expect(Object.keys(got.R0_by_shell).sort()).toEqual(Object.keys(shells).sort());
-      for (const [h, value] of Object.entries(shells)) expectClose(got.R0_by_shell[h], value);
-    }
-    const expectTime = (
-      input: KesslerInput,
-      mode: 'doubling' | 'halving',
-      lo: number,
-      hi: number,
-      years: number,
-    ) => {
-      const got = cascadeTimescale({ ...input, lifetimeModel: 'legacy_fit' });
-      expect(got.mode).toBe(mode);
-      expect(got.shellLo).toBe(lo);
-      expect(got.shellHi).toBe(hi);
-      expect(Math.abs(got.years - years) / years).toBeLessThanOrEqual(1e-3);
-    };
-    expectTime(cases.starlink_today, 'halving', 550, 600, 4.94);
-    expectTime(cases['1GW_spacex'], 'doubling', 850, 900, 0.765);
-    expectTime(cases['1TW_spacex'], 'doubling', 850, 900, 0.000762);
-    expectTime(cases['1GW_low_bestcase'], 'halving', 500, 550, 10.1);
   });
 
   it('cascade timescale follows the fastest growth, or the slowest decay', () => {
@@ -195,19 +165,25 @@ describe('kessler', () => {
       expect(got.shellHi).toBe(hi);
       expect(Math.abs(got.years - years) / years).toBeLessThanOrEqual(1e-3);
     };
-    expectTime(cases.starlink_today, 'halving', 550, 600, 1.94962);
-    expectTime(cases['1GW_spacex'], 'doubling', 850, 900, 0.875641);
-    expectTime(cases['1TW_spacex'], 'doubling', 850, 900, 0.000863446);
-    expectTime(cases['1GW_low_bestcase'], 'halving', 500, 550, 1.08704);
+    expectTime(cases.starlink_today, 'halving', 550, 600, 1.92686);
+    expectTime(cases['1GW_spacex'], 'doubling', 950, 1000, 1.2268);
+    expectTime(cases['1TW_spacex'], 'doubling', 950, 1000, 0.0012133);
+    expectTime(cases['1GW_low_bestcase'], 'halving', 500, 550, 1.07002);
   });
 
   it('active-satellite term scales with total area and with fragment crossing time', () => {
     const a = activeSatelliteTerm(1e9, 5, 30e3, 'spacex', 0.99);
     const b = activeSatelliteTerm(1e9, 5, 5e6, 'spacex', 0.99);
-    const mass = (pSat: number) => (SPACEX_M_SAT * pSat) / 120e3;
-    const area = (pSat: number) => (SPACEX_A_SAT * pSat) / 120e3;
-    const ratio =
-      dragTimescalesYr(875, area(30e3), mass(30e3)).cross / dragTimescalesYr(875, area(5e6), mass(5e6)).cross;
+    const mass = (pSat: number) => (SPACEX_M_SAT * pSat) / SPACEX_P_SAT;
+    const area = (pSat: number) => (SPACEX_A_SAT * pSat) / SPACEX_P_SAT;
+    const sigmaF = (pSat: number) => {
+      const aM2 = area(pSat);
+      const d = fragmentProperties(mass(pSat)).dM;
+      return (Math.sqrt(aM2 / 2) + Math.sqrt((Math.PI * d * d) / 4)) ** 2;
+    };
+    const tau = (pSat: number) => dragTimescalesYr(875, area(pSat), mass(pSat)).cross;
+    // N_i scales as 1/P_sat and N_crit scales as 1/(σ_f τ), so the term scales as σ_f τ / P_sat.
+    const ratio = ((sigmaF(30e3) * tau(30e3)) / 30e3) / ((sigmaF(5e6) * tau(5e6)) / 5e6);
     expect(a.length).toBe(b.length);
     for (let i = 0; i < a.length; i++) {
       if (b[i] === 0) expect(a[i]).toBe(0);

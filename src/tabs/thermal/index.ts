@@ -1,6 +1,7 @@
 import { content } from '../../content';
 import { REFERENCE_AREAS } from '../../physics/references';
-import { thermalBudget, type ThermalInput } from '../../physics/thermal';
+import { FLEET_SUNLIT } from '../../physics/kessler';
+import { AZ93_EPS, T_LOOP_K, thermalBudget, type ThermalInput } from '../../physics/thermal';
 import { openEquations, openSources } from '../../ui/drawer';
 import { fmtArea, fmtSig, fmtTemp } from '../../ui/format';
 import { bigNumber, card, el } from '../../ui/readout';
@@ -54,13 +55,13 @@ interface ThermalState {
 
 function defaults(): ThermalState {
   return {
-    tGpu: 363,
-    dT: 30,
-    eps: 0.9,
+    tGpu: T_LOOP_K,
+    dT: 0,
+    eps: AZ93_EPS,
     qEnv: 57.7,
     pv: 0.22,
     pack: 0.9,
-    sunlit: 1,
+    sunlit: FLEET_SUNLIT,
     pump: false,
     tHot: 400,
     eta: 0.5,
@@ -116,12 +117,13 @@ export function createThermalTab(summary: (text: string) => void) {
 
   const gpu = createSlider({
     id: 'th-gpu',
-    label: 'GPU limit',
-    min: 330,
-    max: 400,
+    label: 'Coolant temperature',
+    sublabel: 'NVIDIA GB200 NVL72 liquid limits are 45 °C in and 65 °C out. The default is the 55 °C average, ignoring the drop from coolant to radiator.',
+    min: 318,
+    max: 338,
     step: 1,
-    value: 363,
-    format: (v) => `${fmtTemp(v).main} · ${fmtTemp(v).sub}`,
+    value: T_LOOP_K,
+    format: (v) => `${Math.round(v - 273)} °C`,
     onInput: (v) => {
       state.tGpu = v;
       schedule();
@@ -130,10 +132,11 @@ export function createThermalTab(summary: (text: string) => void) {
   const drop = createSlider({
     id: 'th-dt',
     label: 'Chip-to-radiator drop',
-    min: 5,
+    sublabel: 'The default ignores this drop.',
+    min: 0,
     max: 60,
     step: 1,
-    value: 30,
+    value: 0,
     format: (v) => `${Math.round(v)} K`,
     onInput: (v) => {
       state.dT = v;
@@ -143,10 +146,11 @@ export function createThermalTab(summary: (text: string) => void) {
   const eps = createSlider({
     id: 'th-eps',
     label: 'Emissivity',
+    sublabel: 'AZ-93 white paint, ε = 0.91.',
     min: 0.8,
     max: 1,
     step: 0.01,
-    value: 0.9,
+    value: AZ93_EPS,
     format: (v) => fmtSig(v, 2),
     onInput: (v) => {
       state.eps = v;
@@ -169,6 +173,7 @@ export function createThermalTab(summary: (text: string) => void) {
   const pv = createSlider({
     id: 'th-pv',
     label: 'Cell efficiency',
+    sublabel: 'Shown for context. The area uses SpaceX’s 250 W/m². Best space cells exceed 32%. SpaceX’s AI1 uses thin-film arrays.',
     min: 0.15,
     max: 0.35,
     step: 0.01,
@@ -195,10 +200,11 @@ export function createThermalTab(summary: (text: string) => void) {
   const sun = createSlider({
     id: 'th-sun',
     label: 'Sunlit fraction',
+    sublabel: 'The default is the filed fleet: sun-synchronous shells assumed dawn-dusk, and the lower-inclination shells averaged over a year.',
     min: 0.6,
     max: 1,
     step: 0.01,
-    value: 1,
+    value: FLEET_SUNLIT,
     format: (v) => fmtSig(v, 2),
     onInput: (v) => {
       state.sunlit = v;
@@ -221,6 +227,7 @@ export function createThermalTab(summary: (text: string) => void) {
   const eta = createSlider({
     id: 'th-eta',
     label: 'How close to ideal',
+    sublabel: 'Half of the ideal heat pump. That is the middle of the 40–60% range for commercial high-temperature pumps, which are terrestrial machines.',
     min: 0.2,
     max: 1,
     step: 0.01,
@@ -451,13 +458,13 @@ export function createThermalTab(summary: (text: string) => void) {
     window.clearTimeout(urlTimer);
     urlTimer = window.setTimeout(() => {
       const params = new URLSearchParams();
-      if (state.tGpu !== 363) params.set('Tgpu', String(Math.round(state.tGpu)));
-      if (state.dT !== 30) params.set('dT', String(Math.round(state.dT)));
-      if (state.eps !== 0.9) params.set('eps', String(state.eps));
+      if (state.tGpu !== T_LOOP_K) params.set('Tgpu', String(Math.round(state.tGpu)));
+      if (state.dT !== 0) params.set('dT', String(Math.round(state.dT)));
+      if (state.eps !== AZ93_EPS) params.set('eps', String(state.eps));
       if (state.qEnv !== 57.7) params.set('q', String(state.qEnv));
       if (state.pv !== 0.22) params.set('pv', String(state.pv));
       if (state.pack !== 0.9) params.set('pack', String(state.pack));
-      if (state.sunlit !== 1) params.set('sun', String(state.sunlit));
+      if (Math.abs(state.sunlit - FLEET_SUNLIT) > 0.0005) params.set('sun', String(state.sunlit));
       if (state.pump) params.set('pump', '1');
       if (state.pump && state.tHot !== 400) params.set('Thot', String(Math.round(state.tHot)));
       if (state.pump && state.eta !== 0.5) params.set('eta', String(state.eta));
@@ -533,13 +540,13 @@ export function createThermalTab(summary: (text: string) => void) {
     readParams(params: URLSearchParams) {
       const next = defaults();
       const num = (key: string, fallback: number) => (params.has(key) ? Number(params.get(key)) : fallback);
-      next.tGpu = num('Tgpu', 363);
-      next.dT = num('dT', 30);
-      next.eps = num('eps', 0.9);
+      next.tGpu = num('Tgpu', T_LOOP_K);
+      next.dT = num('dT', 0);
+      next.eps = num('eps', AZ93_EPS);
       next.qEnv = num('q', 57.7);
       next.pv = num('pv', 0.22);
       next.pack = num('pack', 0.9);
-      next.sunlit = num('sun', 1);
+      next.sunlit = num('sun', FLEET_SUNLIT);
       next.pump = params.get('pump') === '1';
       next.tHot = num('Thot', 400);
       next.eta = num('eta', 0.5);
