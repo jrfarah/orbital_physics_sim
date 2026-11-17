@@ -1,10 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import fixtures from '../../../reference/fixtures.json';
+import legacyFixtures from '../../../reference/fixtures_legacy.json';
 import {
   SIGMA_SCREEN,
+  SPACEX_A_SAT,
+  SPACEX_M_SAT,
   activeSatelliteTerm,
   cascadeTimescale,
   debrisLifetimeYr,
+  dragTimescalesYr,
+  fragmentProperties,
   kessler,
   kesslerShellRates,
   type KesslerInput,
@@ -34,7 +39,10 @@ const numericKeys = [
 
 const cases: Record<string, KesslerInput> = {
   starlink_today: { fleetOverride: { N: 9000, A: 116, m: 800 }, preset: 'starlink', pSat: 1 },
+  starlink_slider: { rateWPerYr: (9000 * 116 * 150) / 5, pSat: 116 * (120000 / 800), preset: 'starlink' },
   '1GW_spacex': { rateWPerYr: 1e9 },
+  '3GW_low': { rateWPerYr: 3e9, preset: 'low' },
+  '10GW_spacex': { rateWPerYr: 10e9 },
   '500GW_spacex': { rateWPerYr: 500e9 },
   '1TW_spacex': { rateWPerYr: 1e12 },
   '1GW_low': { rateWPerYr: 1e9, preset: 'low' },
@@ -50,6 +58,49 @@ describe('kessler', () => {
     for (const [h, expected] of Object.entries(tau)) {
       expectClose(debrisLifetimeYr(Number(h)), expected);
     }
+    const frag = fragmentProperties(3000);
+    expectClose(frag.mF, fixtures.fragment_3000kg.m_f_kg);
+    expectClose(frag.dM, fixtures.fragment_3000kg.d_m);
+    expectClose(frag.rho, fixtures.fragment_3000kg.rho_kg_m3);
+    expectClose(frag.am, fixtures.fragment_3000kg.am_m2_per_kg);
+    const msis = fixtures.tau_msis_ref as Record<string, { reentry_frag: number; cross_frag: number; derelict: number }>;
+    for (const [h, expected] of Object.entries(msis)) {
+      const got = dragTimescalesYr(Number(h), SPACEX_A_SAT, SPACEX_M_SAT);
+      expectClose(got.reentry, expected.reentry_frag);
+      expectClose(got.cross, expected.cross_frag);
+      expectClose(got.derelict, expected.derelict);
+    }
+  });
+
+  it('drag timescales and R0 stay within 5% of the independent targets', () => {
+    const within = (got: number, target: number) => {
+      expect(Math.abs(got - target) / Math.abs(target)).toBeLessThanOrEqual(0.05);
+    };
+    const ref: [number, number, number, number][] = [
+      [525, 1.85, 1.52, 0.32],
+      [625, 8.9, 6.6, 1.5],
+      [825, 117, 62, 20],
+      [875, 192, 89, 33],
+      [975, 437, 159, 75],
+      [1225, 1820, 418, 312],
+    ];
+    for (const [h, reentry, cross, derelict] of ref) {
+      const got = dragTimescalesYr(h, 800, 3000);
+      within(got.reentry, reentry);
+      within(got.cross, cross);
+      within(got.derelict, derelict);
+    }
+    within(kessler({ rateWPerYr: 1e9, preset: 'low' }).R0_max, 0.37);
+    within(kessler({ rateWPerYr: 3e9, preset: 'low' }).R0_max, 1.1);
+    const filed = kessler({ rateWPerYr: 1e9 });
+    within(filed.R0_by_shell['925'], 85);
+    within(kessler({ rateWPerYr: 10e9 }).R0_max, 850);
+    const doubling = cascadeTimescale({ rateWPerYr: 1e9 });
+    expect(doubling.mode).toBe('doubling');
+    expect(doubling.shellLo).toBe(850);
+    expect(doubling.shellHi).toBe(900);
+    within(doubling.years, 0.9);
+    within(doubling.R0, 72);
   });
 
   for (const [name, input] of Object.entries(cases)) {
@@ -90,10 +141,44 @@ describe('kessler', () => {
       preset: 'starlink',
     });
     expect(Math.abs(got.N - 9000)).toBeLessThanOrEqual(1);
-    const shells = fixtures.kessler.starlink_today.R0_by_shell as Record<string, number>;
+    const shells = fixtures.kessler.starlink_slider.R0_by_shell as Record<string, number>;
     for (const [h, value] of Object.entries(shells)) {
       expect(Math.abs((got.R0_by_shell[h] ?? NaN) - value)).toBeLessThanOrEqual(1e-4);
     }
+  });
+
+  it('legacy_fit reproduces the pre-drag fixture values', () => {
+    const tau = legacyFixtures.tau_yr as Record<string, number>;
+    for (const [h, expected] of Object.entries(tau)) {
+      expectClose(debrisLifetimeYr(Number(h)), expected);
+    }
+    for (const [name, input] of Object.entries(cases)) {
+      if (!(name in legacyFixtures.kessler)) continue;
+      const expected = legacyFixtures.kessler[name as keyof typeof legacyFixtures.kessler];
+      const got = kessler({ ...input, lifetimeModel: 'legacy_fit' });
+      for (const key of numericKeys) expectClose(got[key], expected[key] as number);
+      expect(got.linear_regime_ok).toBe(expected.linear_regime_ok);
+      const shells = expected.R0_by_shell as Record<string, number>;
+      expect(Object.keys(got.R0_by_shell).sort()).toEqual(Object.keys(shells).sort());
+      for (const [h, value] of Object.entries(shells)) expectClose(got.R0_by_shell[h], value);
+    }
+    const expectTime = (
+      input: KesslerInput,
+      mode: 'doubling' | 'halving',
+      lo: number,
+      hi: number,
+      years: number,
+    ) => {
+      const got = cascadeTimescale({ ...input, lifetimeModel: 'legacy_fit' });
+      expect(got.mode).toBe(mode);
+      expect(got.shellLo).toBe(lo);
+      expect(got.shellHi).toBe(hi);
+      expect(Math.abs(got.years - years) / years).toBeLessThanOrEqual(1e-3);
+    };
+    expectTime(cases.starlink_today, 'halving', 550, 600, 4.94);
+    expectTime(cases['1GW_spacex'], 'doubling', 850, 900, 0.765);
+    expectTime(cases['1TW_spacex'], 'doubling', 850, 900, 0.000762);
+    expectTime(cases['1GW_low_bestcase'], 'halving', 500, 550, 10.1);
   });
 
   it('cascade timescale follows the fastest growth, or the slowest decay', () => {
@@ -110,16 +195,23 @@ describe('kessler', () => {
       expect(got.shellHi).toBe(hi);
       expect(Math.abs(got.years - years) / years).toBeLessThanOrEqual(1e-3);
     };
-    expectTime(cases.starlink_today, 'halving', 550, 600, 4.94);
-    expectTime(cases['1GW_spacex'], 'doubling', 850, 900, 0.765);
-    expectTime(cases['1TW_spacex'], 'doubling', 850, 900, 0.000762);
-    expectTime(cases['1GW_low_bestcase'], 'halving', 500, 550, 10.1);
+    expectTime(cases.starlink_today, 'halving', 550, 600, 1.94962);
+    expectTime(cases['1GW_spacex'], 'doubling', 850, 900, 0.875641);
+    expectTime(cases['1TW_spacex'], 'doubling', 850, 900, 0.000863446);
+    expectTime(cases['1GW_low_bestcase'], 'halving', 500, 550, 1.08704);
   });
 
-  it('active-satellite term depends on area, not satellite count', () => {
+  it('active-satellite term scales with total area and with fragment crossing time', () => {
     const a = activeSatelliteTerm(1e9, 5, 30e3, 'spacex', 0.99);
     const b = activeSatelliteTerm(1e9, 5, 5e6, 'spacex', 0.99);
+    const mass = (pSat: number) => (SPACEX_M_SAT * pSat) / 120e3;
+    const area = (pSat: number) => (SPACEX_A_SAT * pSat) / 120e3;
+    const ratio =
+      dragTimescalesYr(875, area(30e3), mass(30e3)).cross / dragTimescalesYr(875, area(5e6), mass(5e6)).cross;
     expect(a.length).toBe(b.length);
-    for (let i = 0; i < a.length; i++) expectClose(a[i], b[i]);
+    for (let i = 0; i < a.length; i++) {
+      if (b[i] === 0) expect(a[i]).toBe(0);
+      else expectClose(a[i] / b[i], ratio);
+    }
   });
 });

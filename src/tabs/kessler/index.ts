@@ -166,9 +166,9 @@ export function createKesslerTab(summary: (text: string) => void) {
   primaryPop.append(
     popLine([
       el('b', '', 'What this number means.'),
-      ' Every collision makes fragments. Each fragment either hits something else, making more fragments, or falls out of orbit, after about ',
+      ' Every collision makes fragments. Each fragment either hits something else, making more fragments, or sinks through this altitude shell, after about ',
       tauText,
-      ' at this altitude. R₀ is how many new collisions one collision causes before its fragments fall out.',
+      '. R₀ is how many new collisions one collision causes while its fragments sink through this altitude shell.',
     ]),
     popLine([
       'If R₀ is above 1, debris breeds faster than it decays and grows exponentially. It doubles in about τ·ln2/(R₀−1). If R₀ is below 1, it dies away, halving in about τ·ln2/(1−R₀).',
@@ -192,7 +192,7 @@ export function createKesslerTab(summary: (text: string) => void) {
   secondaryPop.append(
     term,
     document.createTextNode(
-      ' (R₀ = 1): each collision makes enough debris to cause one more collision before atmospheric drag clears it. Above 1, collisions breed collisions. "33,300× past" means that altitude holds 33,300 times more effective targets than it can sustain.',
+      ' (R₀ = 1): each collision makes enough debris to cause one more collision while its fragments sink through that altitude shell. Above 1, collisions breed collisions. "33,300× past" means that altitude holds 33,300 times more effective targets than it can sustain.',
     ),
   );
   const secondaryHost = el('div', 'tip-host');
@@ -613,7 +613,7 @@ export function createKesslerTab(summary: (text: string) => void) {
     const shown = result.shells.find((row) => row.hLo === scale.shellLo && row.hHi === scale.shellHi);
     primary.textContent = heroPhrase(scale.mode, scale.years, !result.linear_regime_ok);
     primary.style.color = style.css;
-    tauText.textContent = shown ? fmtDuration(shown.tau) : '';
+    tauText.textContent = shown ? fmtDuration(shown.tauCross) : '';
     if (shown) {
       secondaryHost.hidden = false;
       secondaryText.textContent = `at ${shown.hLo.toLocaleString('en-US')}–${shown.hHi.toLocaleString('en-US')} km · R₀ = ${fmtSig(scale.R0)}`;

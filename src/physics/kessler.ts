@@ -3,7 +3,8 @@
  * The shell grid is 36 shells: edges at 200, 250, …, 2000 km.
  * SIGMA_SCREEN is computed once at module load by calibrateSigmaScreen().
  */
-import { C_KM_S, R_E, V_KM_YR } from './constants';
+import densityTable from '../../reference/density_msis2_f130_ap7.json';
+import { C_KM_S, R_E, V_KM_YR, YEAR_S } from './constants';
 
 export const EDGES: number[] = [];
 for (let h = 200; h <= 2000; h += 50) EDGES.push(h);
@@ -40,13 +41,127 @@ export const N_SMALL_LEO = 900_000; // 1-10 cm objects in LEO (assumed ~75% of E
 export const N_BIG = densityProfile(N_BIG_LEO);
 export const N_SMALL = densityProfile(N_SMALL_LEO);
 
-/** Crude e-folding fit: ~5 yr at 550 km, ~100 yr at 800 km, ~1000+ yr above 1000 km. */
+/** Legacy hand fit: ~5 yr at 550 km, ~100 yr at 800 km, capped at 10,000 yr. */
 export function debrisLifetimeYr(hKm: number): number {
   const raw = 5 * Math.exp((hKm - 550) / 83);
   return Math.min(1e4, Math.max(0.1, raw));
 }
 
-export const TAU: number[] = H_C.map((h) => debrisLifetimeYr(h));
+/** "msis_drag" is the drag model. "legacy_fit" is the exponential above, bit-for-bit. */
+export type LifetimeModel = 'msis_drag' | 'legacy_fit';
+export const LIFETIME_MODEL: LifetimeModel = 'msis_drag';
+
+// Lewis 2026 Eq. 10.
+const GM = 3.986004418e14; // m^3 s^-2, geocentric gravitational parameter in that equation
+const C_D = 2.2; // Lewis 2026
+const H_REENTRY_KM = 125; // Lewis 2026, re-entry altitude
+const SHELL_KM = 50; // this model's shell width (EDGES step)
+
+// Lewis 2026 supplementary, stated assumptions around Eqs. 17-18.
+// ρ_f = 92.937 · d^{-0.74} kg/m^3 with d in metres (the ORDEM-style 2.8 · d_cm^{-0.74} g/cm^3 relation).
+const FRAG_MASS_DIVISOR = 1250;
+const FRAG_DENSITY_COEFF = 92.937;
+const FRAG_DENSITY_EXP = -0.74;
+
+const ALT_KM = densityTable.alt_km;
+const LOG_RHO = densityTable.rho_kg_m3.map((rho) => Math.log(rho));
+
+/** Global-mean NRLMSIS 2.0 density, kg/m^3. log(ρ) is linear in altitude. */
+export function msisDensity(hKm: number): number {
+  const n = ALT_KM.length;
+  if (hKm <= ALT_KM[0]) return Math.exp(LOG_RHO[0]);
+  if (hKm >= ALT_KM[n - 1]) return Math.exp(LOG_RHO[n - 1]);
+  let lo = 0;
+  let hi = n - 1;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (ALT_KM[mid] <= hKm) lo = mid;
+    else hi = mid;
+  }
+  const span = ALT_KM[hi] - ALT_KM[lo];
+  const t = span === 0 ? 0 : (hKm - ALT_KM[lo]) / span;
+  return Math.exp(LOG_RHO[lo] + t * (LOG_RHO[hi] - LOG_RHO[lo]));
+}
+
+export interface FragmentProperties {
+  mF: number;
+  dM: number;
+  rho: number;
+  am: number;
+}
+
+/**
+ * Mass, diameter, density, and A/m of one catastrophic fragment.
+ * Eq. 18 as extracted from the arXiv text could not be reconciled with these stated assumptions; we use the stated assumptions (sphere, m_f = m_i/1250, ρ_f(d)), not Eq. 18.
+ */
+export function fragmentProperties(mSat: number): FragmentProperties {
+  const mF = mSat / FRAG_MASS_DIVISOR;
+  // m_f = ρ_f(d) · π d^3 / 6, and ρ_f ∝ d^{FRAG_DENSITY_EXP}, so m_f ∝ d^{3 + FRAG_DENSITY_EXP}.
+  const exponent = 3 + FRAG_DENSITY_EXP;
+  const dM = (mF * 6 / (FRAG_DENSITY_COEFF * Math.PI)) ** (1 / exponent);
+  const rho = FRAG_DENSITY_COEFF * dM ** FRAG_DENSITY_EXP;
+  const am = (Math.PI * dM ** 2 / 4) / mF;
+  return { mF, dM, rho, am };
+}
+
+/** Mean projected area of a tumbling flat plate, the same A/2 used for sig_d. m^2/kg. */
+export function derelictAreaToMass(areaM2: number, mSat: number): number {
+  return areaM2 / 2 / mSat;
+}
+
+/** Seconds per (m^2/kg) for |da/dt| at altitude h. Lewis 2026 Eq. 10 without A/m. */
+function dragSecondsPerUnitAm(hKm: number): number {
+  const aM = (R_E + hKm) * 1000;
+  return 1 / (msisDensity(hKm) * C_D * Math.sqrt(GM * aM));
+}
+
+/** Integral from 125 km to h of dh/|da/dt|, per unit A/m. Trapezoid on the 5 km table. */
+function reentrySecondsPerUnitAm(hKm: number): number {
+  if (hKm <= H_REENTRY_KM) return 0;
+  const n = Math.round((hKm - H_REENTRY_KM) / 5);
+  let acc = 0;
+  let prevF = dragSecondsPerUnitAm(H_REENTRY_KM);
+  let prevX = H_REENTRY_KM * 1000;
+  for (let i = 1; i <= n; i++) {
+    const h = H_REENTRY_KM + 5 * i;
+    const f = dragSecondsPerUnitAm(h);
+    const x = h * 1000;
+    acc += (f + prevF) * (x - prevX) * 0.5;
+    prevF = f;
+    prevX = x;
+  }
+  return acc;
+}
+
+export interface DragTimescales {
+  /** TAU_CROSS_FRAG. Used for N_crit and the doubling time. */
+  cross: number;
+  /** TAU_REENTRY_FRAG. Used only for the displayed debris lifetime. */
+  reentry: number;
+  /** TAU_DERELICT. Used for derelict accumulation. */
+  derelict: number;
+}
+
+export function dragTimescalesYr(
+  hKm: number,
+  areaM2: number,
+  massKg: number,
+  model: LifetimeModel = LIFETIME_MODEL,
+): DragTimescales {
+  if (model === 'legacy_fit') {
+    const tau = debrisLifetimeYr(hKm);
+    return { cross: tau, reentry: tau, derelict: tau };
+  }
+  const amF = fragmentProperties(massKg).am;
+  const amD = derelictAreaToMass(areaM2, massKg);
+  const per = dragSecondsPerUnitAm(hKm);
+  const sec = reentrySecondsPerUnitAm(hKm);
+  return {
+    cross: (SHELL_KM * 1000 * per) / (amF * YEAR_S),
+    reentry: sec / (amF * YEAR_S),
+    derelict: sec / (amD * YEAR_S),
+  };
+}
 
 export type Preset = 'spacex' | 'low' | 'spread' | 'starlink' | 'custom';
 
@@ -90,11 +205,15 @@ export interface ShellRates {
   R0: number[];
   coll_active: number[];
   coll_total: number[];
+  tau_cross: number[];
+  tau_reentry: number[];
+  tau_derelict: number[];
 }
 
 export function shellRates(
   nI: number[],
   aM2: number,
+  mSat: number,
   lYr: number,
   s: number,
   fDisp: number,
@@ -103,6 +222,7 @@ export function shellRates(
   fFrag: number,
   coord: number,
   sigmaScreenKm2: number,
+  lifetimeModel: LifetimeModel = LIFETIME_MODEL,
 ): ShellRates {
   const sigD = aM2 / 2 / 1e6; // mean projected area vs small debris, km^2
   const sigSs = (2 * aM2) / 1e6; // pair cross-section between two such satellites, km^2
@@ -113,13 +233,18 @@ export function shellRates(
   const r0: number[] = [];
   const collActive: number[] = [];
   const collTotal: number[] = [];
+  const tauCross: number[] = [];
+  const tauReentry: number[] = [];
+  const tauDerelict: number[] = [];
   for (let i = 0; i < nI.length; i++) {
     const Ni = nI[i];
     const k = Ni * N_SMALL[i] * sigD * V_KM_YR * fVuln; // /yr, undodgeable
     const c = Ni * (N_BIG[i] + (coord * Ni) / V_SH[i]) * (sigmaScreenKm2 + sigSs) * V_KM_YR; // /yr
     const inflow = (fDisp * Ni) / lYr + k; // new derelicts /yr
-    const d = inflow * TAU[i] * (1 - Math.exp(-tYr / TAU[i])); // derelicts after t_yr
-    const nc = V_SH[i] / (fFrag * sigD * V_KM_YR * TAU[i]); // Kessler R0 = 1 threshold
+    // N_crit uses the fragment shell-crossing time. Derelicts use their own re-entry time.
+    const times = dragTimescalesYr(H_C[i], aM2, mSat, lifetimeModel);
+    const d = inflow * times.derelict * (1 - Math.exp(-tYr / times.derelict)); // derelicts after t_yr
+    const nc = V_SH[i] / (fFrag * sigD * V_KM_YR * times.cross); // Kessler R0 = 1 threshold
     const nEff = (1 - s) * Ni + d;
     const r = nEff / nc;
     const ca =
@@ -134,8 +259,22 @@ export function shellRates(
     r0.push(r);
     collActive.push(ca);
     collTotal.push(ca + cd);
+    tauCross.push(times.cross);
+    tauReentry.push(times.reentry);
+    tauDerelict.push(times.derelict);
   }
-  return { kills, cams, D, N_crit: nCrit, R0: r0, coll_active: collActive, coll_total: collTotal };
+  return {
+    kills,
+    cams,
+    D,
+    N_crit: nCrit,
+    R0: r0,
+    coll_active: collActive,
+    coll_total: collTotal,
+    tau_cross: tauCross,
+    tau_reentry: tauReentry,
+    tau_derelict: tauDerelict,
+  };
 }
 
 // Calibrate the conjunction-screening cross-section so that "Starlink today"
@@ -179,6 +318,7 @@ export interface KesslerInput {
   usdPerW?: number;
   usdPerKg?: number;
   fleetOverride?: FleetOverride | null;
+  lifetimeModel?: LifetimeModel;
 }
 
 export interface ShellRow {
@@ -188,7 +328,10 @@ export interface ShellRow {
   N: number;
   R0: number;
   Ncrit: number;
+  /** TAU_REENTRY_FRAG, the displayed debris lifetime. */
   tau: number;
+  /** TAU_CROSS_FRAG, the τ in N_crit and the doubling time. */
+  tauCross: number;
   kills: number;
   cams: number;
   D: number;
@@ -242,17 +385,21 @@ export function kesslerShellRates(input: KesslerInput = {}): { kills: number[]; 
   const fFrag = input.fFrag ?? 112;
   const coord = input.coord ?? 1;
   const fleet = input.fleetOverride ?? null;
+  const lifetimeModel = input.lifetimeModel ?? LIFETIME_MODEL;
   let N: number;
   let A: number;
+  let m: number;
   if (fleet) {
     N = fleet.N;
     A = fleet.A;
+    m = fleet.m;
   } else {
     N = (rate * lYr) / pSatIn;
     A = (SPACEX_A_SAT * pSatIn) / SPACEX_P_SAT;
+    m = (SPACEX_M_SAT * pSatIn) / SPACEX_P_SAT;
   }
   const nI = distribution(preset, band).map((wi) => N * wi);
-  const rows = shellRates(nI, A, lYr, s, fDisp, fVuln, tYr, fFrag, coord, SIGMA_SCREEN);
+  const rows = shellRates(nI, A, m, lYr, s, fDisp, fVuln, tYr, fFrag, coord, SIGMA_SCREEN, lifetimeModel);
   return { kills: rows.kills, coll_total: rows.coll_total, coll_active: rows.coll_active };
 }
 
@@ -271,6 +418,7 @@ export function kessler(input: KesslerInput = {}): KesslerResult {
   const usdPerW = input.usdPerW ?? 30;
   const usdPerKg = input.usdPerKg ?? 1000;
   const fleet = input.fleetOverride ?? null;
+  const lifetimeModel = input.lifetimeModel ?? LIFETIME_MODEL;
 
   let N: number;
   let A: number;
@@ -289,7 +437,7 @@ export function kessler(input: KesslerInput = {}): KesslerResult {
   }
   const w = distribution(preset, band);
   const nI = w.map((wi) => N * wi);
-  const r = shellRates(nI, A, lYr, s, fDisp, fVuln, tYr, fFrag, coord, SIGMA_SCREEN);
+  const r = shellRates(nI, A, m, lYr, s, fDisp, fVuln, tYr, fFrag, coord, SIGMA_SCREEN, lifetimeModel);
 
   let camSum = 0;
   let killSum = 0;
@@ -325,7 +473,8 @@ export function kessler(input: KesslerInput = {}): KesslerResult {
         N: nI[i],
         R0: r.R0[i],
         Ncrit: r.N_crit[i],
-        tau: TAU[i],
+        tau: r.tau_reentry[i],
+        tauCross: r.tau_cross[i],
         kills: r.kills[i],
         cams: r.cams[i],
         D: r.D[i],
@@ -380,11 +529,11 @@ export function cascadeTimescale(params: KesslerInput = {}): CascadeTimescale {
   let growing: { years: number; shell: ShellRow } | null = null;
   let clearing: { years: number; shell: ShellRow } | null = null;
   for (const shell of shells) {
-    if (shell.R0 > 1) {
-      const years = (shell.tau * Math.LN2) / (shell.R0 - 1);
+      if (shell.R0 > 1) {
+      const years = (shell.tauCross * Math.LN2) / (shell.R0 - 1);
       if (!growing || years < growing.years) growing = { years, shell };
     } else {
-      const years = (shell.tau * Math.LN2) / (1 - shell.R0);
+      const years = (shell.tauCross * Math.LN2) / (1 - shell.R0);
       if (!clearing || years > clearing.years) clearing = { years, shell };
     }
   }
@@ -409,7 +558,8 @@ export function activeSatelliteTerm(
 ): number[] {
   const N = (rateWPerYr * lYr) / pSat;
   const A = (SPACEX_A_SAT * pSat) / SPACEX_P_SAT;
+  const m = (SPACEX_M_SAT * pSat) / SPACEX_P_SAT;
   const nI = distribution(preset).map((w) => N * w);
-  const r = shellRates(nI, A, lYr, s, 0.01, 0.1, 10, 112, 1, SIGMA_SCREEN);
+  const r = shellRates(nI, A, m, lYr, s, 0.01, 0.1, 10, 112, 1, SIGMA_SCREEN);
   return nI.map((n, i) => ((1 - s) * n) / r.N_crit[i]);
 }

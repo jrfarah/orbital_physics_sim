@@ -82,6 +82,8 @@ export const content = {
         ],
       },
       { parts: [{ text: 'Satellite size 3,000 kg / 800 m² (SpaceX-stated, as used by) Lewis, H. G. (2026), "Critical Sizes of Satellite Constellations", arXiv:2607.29644. Also the source of 112 fragments per breakup and the ~1% failure rate.' }] },
+      { parts: [{ text: 'Lewis (2026) methods and supplement: C_D = 2.2, re-entry at 125 km, fragment mass m_sat/1250 with density 92.937 d^−0.74 kg/m³ (d in metres), and |da/dt| = ρ C_D (A/m) sqrt(GM a) with GM = 3.986004418×10^14 m³/s². Lewis uses CIRA-72 at F10.7 = 130. This model uses NRLMSIS 2.0 at that same solar activity. His impact speed is 7,500 m/s, his W is 1.1, and his fragment cross-section is (√A_i + √A_f)². Those three are not used here.' }] },
+      { parts: [{ text: 'Emmert, J. T., et al. (2021), "NRLMSIS 2.0: A Whole-Atmosphere Empirical Model of Temperature and Neutral Species Densities", Earth and Space Science 8, e2020EA001321, doi:10.1029/2020EA001321.' }] },
       {
         parts: [
           { text: 'Debris counts (ESA MASTER-8): 54,000 objects >10 cm (incl. ~9,300 active payloads), 1.2 million 1-10 cm, 140 million 1 mm-1 cm: ' },
@@ -104,8 +106,9 @@ export const content = {
       { parts: [{ text: 'Fragment size distribution N ∝ L^−1.71: NASA standard breakup model, Johnson et al. (2001), Adv. Space Res. 28(9), 1377.' }] },
       { parts: [{ text: 'MODEL ASSUMPTIONS:' }] },
       { parts: [{ text: "75% of ESA's non-active >10 cm objects and 75% of the 1-10 cm objects are in LEO, with an altitude profile shaped to match published MASTER/ORDEM curves." }] },
-      { parts: [{ text: 'The debris-lifetime curve is a single exponential fit (≈5 yr at 550 km, ≈100 yr at 800 km, capped at 10,000 yr). Real lifetimes depend on the solar cycle and the object\'s area-to-mass ratio.' }] },
-      { parts: [{ text: 'The cascade factor R₀ uses Kessler\'s critical-density idea per 50 km shell, with the constellation evaluated alone (today\'s debris is not counted toward R₀), which is generous.' }] },
+      { parts: [{ text: 'Debris decay uses the NRLMSIS 2.0 global-mean density at F10.7 = F10.7a = 130 and Ap = 7 in every slot, evaluated at the 2010-03-20 equinox rather than an annual average. Ap = 7 is chosen so the temperature at 1000 km is about 977 K, near Lewis\'s 980 K exosphere. N_crit and the doubling time use how long a fragment takes to cross the 50 km shell. The lifetime gauge uses how long it takes to fall from the shell centre to 125 km. A derelict satellite uses A/m = (A/2)/m, so it falls faster than a fragment. The old exponential fit remains available for comparison. The NASA FAQ lifetimes are only a qualitative sanity check.' }] },
+      { parts: [{ text: 'Known differences from Lewis 2026: the impact speed stays 10 km/s (Lewis uses 7,500 m/s), his W = 1.1 is not applied, and the cross-section stays σ_d = A/2 (Lewis uses σ_f = (√A_i + √A_f)²).' }] },
+      { parts: [{ text: 'The cascade factor R₀ uses Kessler\'s critical-density idea per 50 km shell, with the constellation evaluated alone (today\'s debris is not counted toward R₀), which is generous. τ in N_crit is the shell-crossing time, so R₀ does not depend on the bin width.' }] },
       { parts: [{ text: "The conjunction-screening cross-section is calibrated to Starlink's reported maneuver count." }] },
       { parts: [{ text: 'The model is good to roughly a factor of a few. Conclusions that hold by factors of 100-100,000 are robust; borderline cases are not.' }] },
       { parts: [{ text: 'Costs are illustrative.' }] },
@@ -126,7 +129,7 @@ export const content = {
     ] as Equation[],
     kessler: [
       { title: 'Satellites in orbit', tex: 'N=\\dot{P}\\,L/P_{\\mathrm{sat}}' },
-      { title: 'Cascade factor', tex: 'R_{0}=N_{\\mathrm{eff}}/N_{\\mathrm{crit}}\\qquad N_{\\mathrm{crit}}=V/(F\\,\\sigma_{d}\\,v\\,\\tau)' },
+      { title: 'Cascade factor, τ = shell-crossing time', tex: 'R_{0}=N_{\\mathrm{eff}}/N_{\\mathrm{crit}}\\qquad N_{\\mathrm{crit}}=V/(F\\,\\sigma_{d}\\,v\\,\\tau)' },
       { title: 'Undodgeable hits', tex: '\\mathrm{kills}=N\\,n_{\\mathrm{small}}\\,(A/2)\\,v\\,f_{\\mathrm{vuln}}' },
     ] as Equation[],
   },
