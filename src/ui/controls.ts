@@ -118,12 +118,21 @@ export function createSlider(opts: {
       node.style.left = `${t * 100}%`;
       if (tick.label) node.title = tick.label;
       markRow.append(node);
-      if (!tick.label || tick.label.length > 12) continue;
+      if (!tick.label || tick.label.length > 28) continue;
       const labelW = tick.label.length * 6.2;
-      const left = t * width - labelW / 2;
-      if (left < 4 || left + labelW > width - 4 || left < lastRight + 8) continue;
+      let left = t * width - labelW / 2;
+      let anchor = '50%';
+      if (left < 2) {
+        left = 2;
+        anchor = '0%';
+      } else if (left + labelW > width - 2) {
+        left = width - 2 - labelW;
+        anchor = '100%';
+      }
+      if (left < lastRight + 8) continue;
       const text = el('div', 'mark-name', tick.label);
-      text.style.left = `${t * 100}%`;
+      text.style.left = `${((left + (anchor === '0%' ? 0 : anchor === '100%' ? labelW : labelW / 2)) / width) * 100}%`;
+      text.style.transform = `translateX(-${anchor})`;
       markRow.append(text);
       lastRight = left + labelW;
       labeled = true;

@@ -17,8 +17,11 @@ import {
   kessler,
   kesslerShellRates,
   SPACEX_A_SAT,
+  SPACEX_M_SAT,
   SPACEX_P_SAT,
+  SPACEX_SPAN_M,
   STARLINK_A,
+  STARLINK_M,
   STARLINK_N,
   type KesslerInput,
   type KesslerResult,
@@ -42,7 +45,10 @@ const COORD = [1, 0.3, 0.1, 0.03, 0.01];
 
 interface KesslerState {
   rate: number;
-  area: number;
+  /** Compute per satellite, watts. Ignored while referenceFleet is on. */
+  power: number;
+  /** Starlink today: N, area, and mass come from the catalogue fleet, not this slider. */
+  referenceFleet: boolean;
   L: number;
   preset: Preset;
   band: [number, number];
@@ -62,7 +68,8 @@ interface KesslerState {
 function defaults(): KesslerState {
   return {
     rate: STARLINK_RATE,
-    area: 116,
+    power: SPACEX_P_SAT,
+    referenceFleet: true,
     L: 5,
     preset: 'starlink',
     band: [500, 1000],
@@ -95,9 +102,12 @@ function dodgeChip(pct: number): string {
   return `${pct}% (misses 1 in ${shown})`;
 }
 
-function sizeChip(area: number): string {
-  const across = Math.round(70 * Math.sqrt(area / 800));
-  return `${fmtArea(area)} · ${across.toLocaleString('en-US')} m`;
+function satelliteCaption(powerW: number): string {
+  const area = (SPACEX_A_SAT * powerW) / SPACEX_P_SAT;
+  const span = Math.round(SPACEX_SPAN_M * Math.sqrt(area / SPACEX_A_SAT));
+  const massKg = (SPACEX_M_SAT * powerW) / SPACEX_P_SAT;
+  const mass = massKg >= 10_000 ? `${fmtSig(massKg / 1000)} t` : `${fmtSig(massKg)} kg`;
+  return `≈ ${fmtArea(area)} · ${span.toLocaleString('en-US')} m across · ${mass}`;
 }
 
 function fmtCascadeTime(years: number): string {
@@ -216,8 +226,10 @@ export function createKesslerTab(summary: (text: string) => void) {
   const satsCard = card('Satellites in orbit');
   const satsNum = bigNumber(satsCard.body);
   const satsSub = el('div', 'caption');
+  const satsFew = el('div', 'caption');
+  satsFew.hidden = true;
   satsNum.el.classList.replace('num-xl', 'num-lg');
-  satsCard.body.append(satsSub);
+  satsCard.body.append(satsSub, satsFew);
 
   const camCard = card('Dodges per month');
   const camNum = bigNumber(camCard.body);
@@ -277,6 +289,8 @@ export function createKesslerTab(summary: (text: string) => void) {
     format: (v) => `${fmtPower(v)}/yr`,
     onInput: (v) => {
       state.rate = v;
+      state.referenceFleet = false;
+      syncPower(true);
       wrapped();
     },
   });
@@ -285,35 +299,48 @@ export function createKesslerTab(summary: (text: string) => void) {
       label: snap.label,
       onClick: () => {
         state.rate = snap.watts;
+        state.referenceFleet = snap.label === 'Starlink today';
+        if (state.referenceFleet) state.preset = 'starlink';
         rate.setValue(snap.watts, true);
+        preset.setValue(state.preset, true);
+        band.element.hidden = state.preset !== 'custom';
+        syncPower(true);
+        paintFleet();
         wrapped();
       },
     })),
     'chips',
   );
-  const area = createSlider({
-    id: 'k-area',
-    label: 'Satellite size',
-    min: 50,
-    max: 200000,
+  const power = createSlider({
+    id: 'k-power',
+    label: 'Compute per satellite',
+    min: 10e3,
+    max: STARLINK_RATE,
     step: 1,
-    value: 116,
+    value: SPACEX_P_SAT,
     scale: 'log',
-    format: sizeChip,
+    format: fmtPower,
     marks: [
-      { value: 116, label: 'Starlink total area' },
-      { value: 800, label: 'SpaceX AI' },
+      { value: SPACEX_P_SAT, label: 'SpaceX AI sat (120 kW)' },
+      { value: STARLINK_RATE, label: 'one per year' },
     ],
     onInput: (v) => {
-      state.area = v;
+      state.power = v;
+      state.referenceFleet = false;
+      paintFleet();
       wrapped();
     },
   });
+  const fleetBadge = el('span', 'badge', 'Reference fleet');
+  fleetBadge.hidden = true;
+  power.element.querySelector('.field-head')?.append(fleetBadge);
   const resetSize = el('button', 'text-link', 'reset to SpaceX satellite');
   resetSize.type = 'button';
   resetSize.addEventListener('click', () => {
-    state.area = 800;
-    area.setValue(800, true);
+    state.power = SPACEX_P_SAT;
+    state.referenceFleet = false;
+    power.setValue(SPACEX_P_SAT, true);
+    paintFleet();
     wrapped();
   });
   const life = createSlider({
@@ -526,7 +553,7 @@ export function createKesslerTab(summary: (text: string) => void) {
     ),
     rate.element,
     rateSnaps,
-    area.element,
+    power.element,
     resetSize,
     sizePower,
     sizeNote,
@@ -552,9 +579,39 @@ export function createKesslerTab(summary: (text: string) => void) {
     return node;
   }
 
+  function powerCap(): number {
+    return Math.max(10e3, state.rate);
+  }
+
+  function syncPower(flash: boolean): void {
+    const cap = powerCap();
+    const clamped = state.power > cap;
+    if (clamped) state.power = cap;
+    power.setRange(10e3, cap, state.power);
+    power.setMarks([
+      { value: SPACEX_P_SAT, label: 'SpaceX AI sat (120 kW)' },
+      { value: cap, label: 'one per year' },
+    ]);
+    if (clamped && flash) {
+      const chip = power.element.querySelector('.chip');
+      if (chip) {
+        chip.classList.remove('flash');
+        void (chip as HTMLElement).offsetWidth;
+        chip.classList.add('flash');
+      }
+    }
+  }
+
+  function paintFleet(): void {
+    power.setDisabled(state.referenceFleet);
+    fleetBadge.hidden = !state.referenceFleet;
+  }
+
   function paintControls(): void {
     rate.setValue(state.rate, true);
-    area.setValue(state.area, true);
+    syncPower(false);
+    power.setValue(state.power, true);
+    paintFleet();
     life.setValue(state.L, true);
     dodge.setValue(state.dodge, true);
     disp.setValue(state.dispPct, true);
@@ -579,11 +636,13 @@ export function createKesslerTab(summary: (text: string) => void) {
     const next = defaults();
     if (kind === 'filed') {
       next.rate = 1e9;
-      next.area = 800;
+      next.power = SPACEX_P_SAT;
+      next.referenceFleet = false;
       next.preset = 'spacex';
     } else if (kind === 'best') {
       next.rate = rateNow;
-      next.area = 800;
+      next.power = SPACEX_P_SAT;
+      next.referenceFleet = false;
       next.preset = 'low';
       next.dodge = 99.99;
       next.dispPct = 0.1;
@@ -599,7 +658,10 @@ export function createKesslerTab(summary: (text: string) => void) {
     return {
       rateWPerYr: state.rate,
       LYr: state.L,
-      pSat: state.area * W_PER_M2,
+      pSat: state.power,
+      fleetOverride: state.referenceFleet
+        ? { N: STARLINK_N, A: STARLINK_A, m: STARLINK_M }
+        : null,
       preset: state.preset,
       band: state.band,
       s: state.dodge / 100,
@@ -622,7 +684,7 @@ export function createKesslerTab(summary: (text: string) => void) {
     const result = resultOf();
     live().resetSim();
     const rates = kesslerShellRates(inputOf());
-    sizePower.textContent = fmtPower(state.area * W_PER_M2);
+    sizePower.textContent = satelliteCaption(state.power);
     const count = live().apply(result.shells, {
       area: result.A_sat,
       kills: rates.kills,
@@ -653,6 +715,8 @@ export function createKesslerTab(summary: (text: string) => void) {
     bannerWarn.textContent = "Off the model's scale: satellites are destroyed faster than replaced.";
     satsNum.set(fmtBig(result.N));
     satsSub.textContent = `${fmtBig(result.launches_per_yr)}/yr to replace`;
+    satsFew.hidden = result.N >= 100;
+    satsFew.textContent = `${fmtSig(result.N)} satellites — few large structures; rates below are averages`;
     camNum.set(fmtBig(result.cam_per_month));
     camSub.textContent = `${fmtSig(result.cam_ratio_vs_starlink, 2)}× Starlink today`;
     hitsNum.set(fmtBig(result.kills_per_yr));
@@ -687,7 +751,9 @@ export function createKesslerTab(summary: (text: string) => void) {
     urlTimer = window.setTimeout(() => {
       const params = new URLSearchParams();
       if (Math.abs(state.rate - STARLINK_RATE) / STARLINK_RATE > 0.01) params.set('rate', state.rate.toExponential().replace('+', ''));
-      if (Math.abs(state.area - 116) > 0.5) params.set('area', String(Math.round(state.area)));
+      if (!state.referenceFleet && Math.abs(state.power - SPACEX_P_SAT) / SPACEX_P_SAT > 0.01) {
+        params.set('psat', String(Math.round(state.power)));
+      }
       if (state.L !== 5) params.set('L', String(state.L));
       if (state.preset !== 'starlink') params.set('preset', state.preset);
       if (state.preset === 'custom' && (state.band[0] !== 500 || state.band[1] !== 1000)) {
@@ -710,6 +776,8 @@ export function createKesslerTab(summary: (text: string) => void) {
     recompute();
     writeUrl();
   };
+  syncPower(false);
+  paintFleet();
 
   let shown = false;
   return {
@@ -733,9 +801,11 @@ export function createKesslerTab(summary: (text: string) => void) {
       const next = defaults();
       if (params.has('rate')) next.rate = Number(params.get('rate'));
       if (params.has('L')) next.L = Number(params.get('L'));
-      if (params.has('area')) next.area = Number(params.get('area'));
-      else if (params.has('psat')) next.area = Number(params.get('psat')) / W_PER_M2;
+      if (params.has('psat')) next.power = Number(params.get('psat'));
+      else if (params.has('area')) next.power = Number(params.get('area')) * W_PER_M2;
       const presetName = params.get('preset');
+      next.referenceFleet =
+        !params.has('psat') && !params.has('area') && !params.has('rate') && (presetName === null || presetName === 'starlink');
       if (
         presetName === 'low' ||
         presetName === 'spread' ||
@@ -759,6 +829,8 @@ export function createKesslerTab(summary: (text: string) => void) {
       if (params.has('t')) next.tYr = Number(params.get('t'));
       if (params.has('frag')) next.fFrag = Number(params.get('frag'));
       if (params.has('coord')) next.coord = Number(params.get('coord'));
+      if (next.power > next.rate) next.power = next.rate;
+      if (next.power < 10e3) next.power = 10e3;
       Object.assign(state, next);
       paintControls();
     },
