@@ -190,4 +190,51 @@ describe('kessler', () => {
       else expectClose(a[i] / b[i], ratio);
     }
   });
+
+  it('modular on and off match for every satellite at or below 800 m²', () => {
+    for (const input of Object.values(cases)) {
+      const on = kessler({ ...input, modular: true });
+      const off = kessler({ ...input, modular: false });
+      if (on.A_sat > SPACEX_A_SAT) continue;
+      expect(on.kills_per_yr).toBe(off.kills_per_yr);
+      expect(on.R0_max).toBe(off.R0_max);
+      expect(on.derelicts).toBe(off.derelicts);
+      expect(on.collisions_per_yr).toBe(off.collisions_per_yr);
+      expect(on.fragments_per_yr).toBe(off.fragments_per_yr);
+    }
+  });
+
+  it('a 10 MW modular satellite is killed only through its 800 m² core', () => {
+    const input: KesslerInput = { rateWPerYr: 1e9, pSat: 10e6, preset: 'spacex' };
+    const on = kessler({ ...input, modular: true });
+    const off = kessler({ ...input, modular: false });
+    expectClose(on.kills_per_yr, off.kills_per_yr * (SPACEX_A_SAT / on.A_sat));
+    expect(on.panel_hits_per_sat_per_yr).toBeGreaterThan(0);
+    expect(kessler({ ...input, modular: false }).panel_hits_per_sat_per_yr).toBe(0);
+  });
+
+  it('modular R0 at 1 MW and 100 MW agree within 15%', () => {
+    const small = kessler({ rateWPerYr: 1e9, pSat: 1e6, modular: true });
+    const large = kessler({ rateWPerYr: 1e9, pSat: 100e6, modular: true });
+    const rel = Math.abs(small.R0_max - large.R0_max) / Math.max(small.R0_max, large.R0_max);
+    expect(rel).toBeLessThanOrEqual(0.15);
+  });
+
+  it('the modular active term follows one module’s fragment mass', () => {
+    const pSat = 10e6;
+    const on = activeSatelliteTerm(1e9, 5, pSat, 'spacex', 0.99, true);
+    const off = activeSatelliteTerm(1e9, 5, pSat, 'spacex', 0.99, false);
+    const area = (SPACEX_A_SAT * pSat) / SPACEX_P_SAT;
+    const mass = (SPACEX_M_SAT * pSat) / SPACEX_P_SAT;
+    const sigma = (m: number) => {
+      const d = fragmentProperties(m).dM;
+      return (Math.sqrt(area / 2) + Math.sqrt((Math.PI * d * d) / 4)) ** 2;
+    };
+    const tau = (m: number) => dragTimescalesYr(875, area, m).cross;
+    const ratio = (sigma(SPACEX_M_SAT) * tau(SPACEX_M_SAT)) / (sigma(mass) * tau(mass));
+    for (let i = 0; i < on.length; i++) {
+      if (off[i] === 0) expect(on[i]).toBe(0);
+      else expectClose(on[i] / off[i], ratio);
+    }
+  });
 });

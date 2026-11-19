@@ -63,6 +63,7 @@ interface KesslerState {
   debris: boolean;
   paused: boolean;
   solar: SolarF107;
+  modular: boolean;
 }
 
 function defaults(): KesslerState {
@@ -84,6 +85,7 @@ function defaults(): KesslerState {
     debris: true,
     paused: reducedMotion(),
     solar: 130,
+    modular: true,
   };
 }
 
@@ -264,7 +266,9 @@ export function createKesslerTab(summary: (text: string) => void) {
   const moneyBody = el('div');
   money.body.append(moneyBody, el('div', 'faint', 'Bigger satellites: fewer maneuvers, but each loss costs more.'));
   const dots = el('div', 'faint span-2');
-  const more = createMoreDetail('kessler', [fragCard.element, gaugeCard.element, latency, money.element, r0Legend(), dots]);
+  const panelHits = el('div', 'caption');
+  panelHits.hidden = true;
+  const more = createMoreDetail('kessler', [fragCard.element, gaugeCard.element, latency, money.element, r0Legend(), dots, panelHits]);
   hud.append(banner, satsCard.element, camCard.element, hitsCard.element, deadCard.element, more);
 
   const pause = createToggle({
@@ -533,13 +537,23 @@ export function createKesslerTab(summary: (text: string) => void) {
   const sizePop = el(
     'div',
     'note-pop',
-    "For a fixed deployment rate, total area in orbit is fixed. Fewer, bigger satellites need fewer collision-avoidance maneuvers. But untracked debris hits the same total area just as often, and in this model each fatal hit strands a whole satellite. So the stranded area per year grows with satellite size, and the cascade factor rises. If giant satellites were modular, so a hit disables only one section, lower 'Fraction where a hit is fatal' in Advanced.",
+    'For a fixed deployment rate, total area in orbit is fixed. Fewer, bigger satellites need fewer collision-avoidance maneuvers. Untracked debris still hits that whole area. Above 120 kW the satellite is modelled as 120 kW modules sharing one core: a hit damages one module, and a dead core strands the whole structure.',
   );
   sizePop.hidden = true;
   sizeInfo.addEventListener('click', () => {
     sizePop.hidden = !sizePop.hidden;
   });
   sizeNote.append(sizeInfo, sizePop);
+  const modularToggle = createToggle({
+    id: 'k-modular',
+    label: 'Large satellites are modular',
+    value: true,
+    onChange: (on) => {
+      state.modular = on;
+      wrapped();
+    },
+  });
+
   const controls = el('div');
   controls.append(
     el('h2', 'section-title', 'Scenarios'),
@@ -562,7 +576,7 @@ export function createKesslerTab(summary: (text: string) => void) {
     el('h2', 'section-title', 'Avoidance'),
     dodge.element,
     disp.element,
-    createCollapsible('Advanced', [life.element, solar.element, debrisToggle.element, vuln.element, frag.element, coord.element, years.element, usdW.element, usdKg.element]),
+    createCollapsible('Advanced', [life.element, solar.element, debrisToggle.element, modularToggle.element, vuln.element, frag.element, coord.element, years.element, usdW.element, usdKg.element]),
     el('div', 'footer-row', ''),
   );
   const footer = controls.querySelector('.footer-row') as HTMLElement;
@@ -625,6 +639,7 @@ export function createKesslerTab(summary: (text: string) => void) {
     solar.setValue(state.solar === 100 ? '100' : '130', true);
     band.setValue(state.band, true);
     debrisToggle.setValue(state.debris, true);
+    modularToggle.setValue(state.modular, true);
     band.element.hidden = state.preset !== 'custom';
     pause.setValue(state.paused, true);
     live().setPaused(state.paused);
@@ -673,6 +688,7 @@ export function createKesslerTab(summary: (text: string) => void) {
       usdPerW: state.usdPerW,
       usdPerKg: state.usdPerKg,
       solarF107: state.solar,
+      modular: state.modular,
     };
   }
 
@@ -685,6 +701,8 @@ export function createKesslerTab(summary: (text: string) => void) {
     live().resetSim();
     const rates = kesslerShellRates(inputOf());
     sizePower.textContent = satelliteCaption(state.power);
+    panelHits.hidden = result.panel_hits_per_sat_per_yr <= 0;
+    panelHits.textContent = `Panel hits per satellite per year (non-fatal): ${fmtSig(result.panel_hits_per_sat_per_yr)}`;
     const count = live().apply(result.shells, {
       area: result.A_sat,
       kills: rates.kills,
@@ -766,6 +784,7 @@ export function createKesslerTab(summary: (text: string) => void) {
       if (state.fFrag !== 112) params.set('frag', String(Math.round(state.fFrag)));
       if (state.coord !== 1) params.set('coord', String(state.coord));
       if (state.solar !== 130) params.set('f107', String(state.solar));
+      if (!state.modular) params.set('modular', '0');
       const qs = params.toString();
       const next = `#/kessler${qs ? `?${qs}` : ''}`;
       if (location.hash !== next) history.replaceState(null, '', next);
@@ -829,6 +848,7 @@ export function createKesslerTab(summary: (text: string) => void) {
       if (params.has('t')) next.tYr = Number(params.get('t'));
       if (params.has('frag')) next.fFrag = Number(params.get('frag'));
       if (params.has('coord')) next.coord = Number(params.get('coord'));
+      if (params.get('modular') === '0') next.modular = false;
       if (next.power > next.rate) next.power = next.rate;
       if (next.power < 10e3) next.power = 10e3;
       Object.assign(state, next);

@@ -322,13 +322,19 @@ export function shellRates(
   sigmaScreenKm2: number,
   lifetimeModel: LifetimeModel = LIFETIME_MODEL,
   f107: SolarF107 = SOLAR_F107,
+  modular = false,
 ): ShellRates {
-  const sigD = aM2 / 2 / 1e6; // mean projected area vs small debris, km^2
+  // A satellite larger than one SpaceX AI satellite is a stack of those modules on one core.
+  const modularGiant = modular && aM2 > SPACEX_A_SAT;
+  const fatalArea = modularGiant ? SPACEX_A_SAT : aM2;
+  const fragMass = modularGiant ? SPACEX_M_SAT : mSat;
+  const sigD = aM2 / 2 / 1e6; // mean projected area vs small debris, km^2. Collisions use the whole structure.
+  const sigKill = fatalArea / 2 / 1e6; // only a hit on the shared core is fatal
   const sigSs = (2 * aM2) / 1e6; // pair cross-section between two such satellites, km^2
   // S1 Lewis Eq. 1. Collision, kill, and dodge rates keep v = 10 km/s (NASA ODPO FAQ).
   const vLewisKmYr = (7500 / 1000) * YEAR_S; // 7500 m/s, "an assumed, conservative value"
   const wEcc = 1.1; // S1 eccentricity factor
-  const dF = fragmentProperties(mSat).dM;
+  const dF = fragmentProperties(fragMass).dM;
   const aI = aM2 / 2;
   const aF = (Math.PI * dF * dF) / 4;
   const sigmaFKm2 = (Math.sqrt(aI) + Math.sqrt(aF)) ** 2 / 1e6;
@@ -344,12 +350,16 @@ export function shellRates(
   const tauDerelict: number[] = [];
   for (let i = 0; i < nI.length; i++) {
     const Ni = nI[i];
-    const k = Ni * N_SMALL[i] * sigD * V_KM_YR * fVuln; // /yr, undodgeable
+    const k = Ni * N_SMALL[i] * sigKill * V_KM_YR * fVuln; // /yr, undodgeable, core only when modular
     const c = Ni * (N_BIG[i] + (coord * Ni) / V_SH[i]) * (sigmaScreenKm2 + sigSs) * V_KM_YR; // /yr
     const inflow = (fDisp * Ni) / lYr + k; // new derelicts /yr
     // N_crit uses the fragment shell-crossing time. Derelicts use their own re-entry time.
-    const times = dragTimescalesYr(H_C[i], aM2, mSat, lifetimeModel, f107);
-    const d = inflow * times.derelict * (1 - Math.exp(-tYr / times.derelict)); // derelicts after t_yr
+    // A modular collision breaks up one module; a dead core still strands the whole satellite.
+    const times = dragTimescalesYr(H_C[i], aM2, fragMass, lifetimeModel, f107);
+    const tauDer = modularGiant
+      ? dragTimescalesYr(H_C[i], aM2, mSat, lifetimeModel, f107).derelict
+      : times.derelict;
+    const d = inflow * tauDer * (1 - Math.exp(-tYr / tauDer)); // derelicts after t_yr
     // N_0 is the fragment count F_frag (S1). 
     const nc = V_SH[i] / (fFrag * wEcc * sigmaFKm2 * vLewisKmYr * times.cross);
     const nEff = (1 - s) * Ni + d;
@@ -368,7 +378,7 @@ export function shellRates(
     collTotal.push(ca + cd);
     tauCross.push(times.cross);
     tauReentry.push(times.reentry);
-    tauDerelict.push(times.derelict);
+    tauDerelict.push(tauDer);
   }
   return {
     kills,
@@ -429,6 +439,8 @@ export interface KesslerInput {
   fleetOverride?: FleetOverride | null;
   lifetimeModel?: LifetimeModel;
   solarF107?: SolarF107;
+  /** Satellites above 120 kW are modules of that size on one core. Default on. */
+  modular?: boolean;
 }
 
 export interface ShellRow {
@@ -468,6 +480,8 @@ export interface KesslerResult {
   planned_replacement_usd_per_yr: number;
   unplanned_loss_usd_per_yr: number;
   rtt_ms_max: number;
+  /** Undodgeable 1–10 cm hits per year on the non-core area of one modular satellite, worst occupied shell. */
+  panel_hits_per_sat_per_yr: number;
   /** Occupied shells, for the 3D view. Not part of the reference dict. */
   shells: ShellRow[];
   worst_h: number;
@@ -497,6 +511,7 @@ export function kesslerShellRates(input: KesslerInput = {}): { kills: number[]; 
   const fleet = input.fleetOverride ?? null;
   const lifetimeModel = input.lifetimeModel ?? LIFETIME_MODEL;
   const f107 = input.solarF107 ?? SOLAR_F107;
+  const modular = input.modular ?? true;
   let N: number;
   let A: number;
   let m: number;
@@ -510,7 +525,7 @@ export function kesslerShellRates(input: KesslerInput = {}): { kills: number[]; 
     m = (SPACEX_M_SAT * pSatIn) / SPACEX_P_SAT;
   }
   const nI = distribution(preset, band).map((wi) => N * wi);
-  const rows = shellRates(nI, A, m, lYr, s, fDisp, fVuln, tYr, fFrag, coord, SIGMA_SCREEN, lifetimeModel, f107);
+  const rows = shellRates(nI, A, m, lYr, s, fDisp, fVuln, tYr, fFrag, coord, SIGMA_SCREEN, lifetimeModel, f107, modular);
   return { kills: rows.kills, coll_total: rows.coll_total, coll_active: rows.coll_active };
 }
 
@@ -531,6 +546,7 @@ export function kessler(input: KesslerInput = {}): KesslerResult {
   const fleet = input.fleetOverride ?? null;
   const lifetimeModel = input.lifetimeModel ?? LIFETIME_MODEL;
   const f107 = input.solarF107 ?? SOLAR_F107;
+  const modular = input.modular ?? true;
 
   let N: number;
   let A: number;
@@ -549,7 +565,7 @@ export function kessler(input: KesslerInput = {}): KesslerResult {
   }
   const w = distribution(preset, band);
   const nI = w.map((wi) => N * wi);
-  const r = shellRates(nI, A, m, lYr, s, fDisp, fVuln, tYr, fFrag, coord, SIGMA_SCREEN, lifetimeModel, f107);
+  const r = shellRates(nI, A, m, lYr, s, fDisp, fVuln, tYr, fFrag, coord, SIGMA_SCREEN, lifetimeModel, f107, modular);
 
   let camSum = 0;
   let killSum = 0;
@@ -560,6 +576,8 @@ export function kessler(input: KesslerInput = {}): KesslerResult {
   let r0Max = 0;
   let hMaxOcc = 0;
   let worstH = H_C[0];
+  let panelHits = 0;
+  const panelSig = modular && A > SPACEX_A_SAT ? (A - SPACEX_A_SAT) / 2 / 1e6 : 0;
   const r0ByShell: Record<string, number> = {};
   const shells: ShellRow[] = [];
   for (let i = 0; i < nI.length; i++) {
@@ -577,6 +595,7 @@ export function kessler(input: KesslerInput = {}): KesslerResult {
         worstH = H_C[i];
       }
       hMaxOcc = Math.max(hMaxOcc, H_C[i]);
+      if (panelSig > 0) panelHits = Math.max(panelHits, N_SMALL[i] * panelSig * V_KM_YR);
       r0ByShell[String(Math.round(H_C[i]))] = r.R0[i];
       shells.push({
         h: H_C[i],
@@ -619,6 +638,7 @@ export function kessler(input: KesslerInput = {}): KesslerResult {
     planned_replacement_usd_per_yr: (N / lYr) * costSat,
     unplanned_loss_usd_per_yr: (killSum + collActiveSum) * costSat,
     rtt_ms_max: ((2 * (hMaxOcc + 25)) / C_KM_S) * 1e3,
+    panel_hits_per_sat_per_yr: panelHits,
     shells,
     worst_h: worstH,
   };
@@ -667,11 +687,12 @@ export function activeSatelliteTerm(
   pSat: number,
   preset: Preset,
   s: number,
+  modular = false,
 ): number[] {
   const N = (rateWPerYr * lYr) / pSat;
   const A = (SPACEX_A_SAT * pSat) / SPACEX_P_SAT;
   const m = (SPACEX_M_SAT * pSat) / SPACEX_P_SAT;
   const nI = distribution(preset).map((w) => N * w);
-  const r = shellRates(nI, A, m, lYr, s, 0.01, 0.1, 10, 112, 1, SIGMA_SCREEN);
+  const r = shellRates(nI, A, m, lYr, s, 0.01, 0.1, 10, 112, 1, SIGMA_SCREEN, LIFETIME_MODEL, SOLAR_F107, modular);
   return nI.map((n, i) => ((1 - s) * n) / r.N_crit[i]);
 }
